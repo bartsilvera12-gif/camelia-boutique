@@ -168,9 +168,9 @@ export default function ConversationList() {
                       </span>
                     </div>
                     <div className="flex items-center gap-1.5 mt-0.5">
-                      {c.has_audio && <Mic size={12} className="text-thyme shrink-0" />}
+                      {c.has_audio && !(c.last_message || "").startsWith("🎤") && <Mic size={12} className="text-thyme shrink-0" />}
                       <span className={"truncate text-[12.5px] " + (unread ? "text-ink/85" : "text-thyme")}>
-                        {(c.last_message || "").replace(/\*/g, "").split("\n")[0]}
+                        {(c.last_message || "").replace(/[*_]/g, "").split("\n")[0]}
                       </span>
                       <span className="ml-auto flex items-center gap-1 shrink-0">
                         {c.needs_human && c.status !== "cerrada" && (

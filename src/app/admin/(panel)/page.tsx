@@ -46,7 +46,7 @@ export default async function AdminDashboard() {
     <div className="max-w-7xl">
       <header className="flex flex-wrap items-end justify-between gap-4 mb-7">
         <div>
-          <div className="text-[11px] uppercase tracking-[0.24em] text-thyme capitalize">{fecha}</div>
+          <div className="text-[11px] uppercase tracking-[0.24em] text-thyme">{fecha}</div>
           <h1 className="font-serif text-4xl text-ink mt-1">{saludo} 🌸</h1>
           <p className="text-sm text-muted mt-1">Esto es lo que pasa hoy en Camélia.</p>
         </div>

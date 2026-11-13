@@ -9,15 +9,17 @@ import { dayKey, dayLabel } from "../ui";
 
 const TZ = "America/Asuncion";
 
-/** *negrita* y saltos de línea, como en WhatsApp. */
+/** *negrita*, _cursiva_ y saltos de línea, como en WhatsApp. */
 function Rich({ text }: { text: string }) {
   return (
     <>
       {text.split("\n").map((line, i) => (
         <span key={i} className="block min-h-[1em]">
-          {line.split(/(\*[^*\n]+\*)/g).map((part, j) =>
+          {line.split(/(\*[^*\n]+\*|_[^_\n]+_)/g).map((part, j) =>
             part.length > 2 && part.startsWith("*") && part.endsWith("*") ? (
               <b key={j} className="font-semibold">{part.slice(1, -1)}</b>
+            ) : part.length > 2 && part.startsWith("_") && part.endsWith("_") ? (
+              <i key={j} className="opacity-75">{part.slice(1, -1)}</i>
             ) : (
               <Fragment key={j}>{part}</Fragment>
             )
