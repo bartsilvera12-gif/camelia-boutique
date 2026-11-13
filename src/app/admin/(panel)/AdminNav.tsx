@@ -53,13 +53,15 @@ export default function AdminNav({ email, logout }: { email: string; logout: () 
   const lastOrder = useRef<string | null>(null);
 
   // Avisos en vivo: pedidos pendientes y conversaciones que piden una persona
+  // (se recalcula también al cambiar de pantalla, así se apaga apenas abrís el chat)
   useEffect(() => {
     const sb = browserClient();
     let alive = true;
     async function tick() {
       const [o, c, latest] = await Promise.all([
         sb.from("orders").select("id", { count: "exact", head: true }).eq("status", "pendiente"),
-        sb.from("conversations").select("id", { count: "exact", head: true }).eq("needs_human", true).neq("status", "cerrada"),
+        // solo las que piden una persona y tienen mensajes sin ver: al abrir el chat se apaga
+        sb.from("conversations").select("id", { count: "exact", head: true }).eq("needs_human", true).neq("status", "cerrada").gt("unread", 0),
         sb.from("orders").select("id, customer_name, source").order("created_at", { ascending: false }).limit(1).maybeSingle(),
       ]);
       if (!alive) return;
@@ -76,7 +78,7 @@ export default function AdminNav({ email, logout }: { email: string; logout: () 
       alive = false;
       clearInterval(t);
     };
-  }, []);
+  }, [path]);
 
   useEffect(() => setOpen(false), [path]);
 
