@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/admin";
 import type { StoreSettings } from "@/lib/types";
 import { saveSettings } from "../bot/actions";
 import { bridgeQrPage, bridgeStatus } from "@/lib/wa";
+import WaQr from "./WaQr";
 
 function WaStatus({ status, qr }: { status: { connection: string; meNumber?: string | null } | null; qr: string | null }) {
   if (!status) {
@@ -18,9 +19,7 @@ function WaStatus({ status, qr }: { status: { connection: string; meNumber?: str
         <span className={open ? "text-thyme" : "text-rose"}>●</span>{" "}
         {open ? `Conectado${status.meNumber ? ` (${status.meNumber})` : ""}` : status.connection === "qr" ? "Esperando escanear el QR" : `Estado: ${status.connection}`}
       </div>
-      {!open && qr && (
-        <a href={qr} target="_blank" rel="noreferrer" className="underline text-thyme">Vincular número (QR) ↗</a>
-      )}
+      {!open && qr && <WaQr />}
     </div>
   );
 }

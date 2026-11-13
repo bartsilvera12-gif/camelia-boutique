@@ -61,6 +61,23 @@ export async function bridgeStatus(): Promise<{ connection: string; meNumber?: s
   }
 }
 
+/** QR crudo del puente (el texto que hay que dibujar) y el estado de la conexión. */
+export async function bridgeQr(): Promise<{ connection: string; qr: string | null } | null> {
+  if (!bridgeConfigured()) return null;
+  try {
+    const r = await fetch(`${BRIDGE_URL}/qr`, {
+      headers: { "x-bridge-secret": BRIDGE_SECRET },
+      signal: AbortSignal.timeout(8000),
+      cache: "no-store",
+    });
+    if (!r.ok) return { connection: `error ${r.status}`, qr: null };
+    const j = await r.json();
+    return { connection: j.connection || "desconocido", qr: j.qr || null };
+  } catch {
+    return { connection: "sin respuesta", qr: null };
+  }
+}
+
 export function bridgeQrPage() {
   return bridgeConfigured() ? `${BRIDGE_URL}/qr.html?secreto=${encodeURIComponent(BRIDGE_SECRET)}` : null;
 }
