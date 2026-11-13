@@ -1,16 +1,18 @@
-import { serverClient, supabaseConfigured } from "./supabase";
+import { publicClient } from "./supabase/public";
+import { supabaseConfigured } from "./supabase/config";
 import { demoCategories, demoProducts, withCategory } from "./demo-data";
 import type { Category, Product } from "./types";
 
 export async function getCategories(): Promise<Category[]> {
-  const sb = serverClient();
+  const sb = publicClient();
   if (!sb) return demoCategories;
   const { data, error } = await sb
     .from("categories")
     .select("*")
     .eq("active", true)
+    .order("sort_order")
     .order("name");
-  if (error || !data) return demoCategories;
+  if (error || !data) return [];
   return data as Category[];
 }
 
@@ -19,7 +21,7 @@ export async function getProducts(opts?: {
   categorySlug?: string;
   search?: string;
 }): Promise<Product[]> {
-  const sb = serverClient();
+  const sb = publicClient();
   if (!sb) {
     let list = demoProducts.filter((p) => p.active);
     if (opts?.featured) list = list.filter((p) => p.featured);
@@ -43,13 +45,13 @@ export async function getProducts(opts?: {
   if (error || !data) return [];
   let list = data as Product[];
   if (opts?.categorySlug) {
-    list = list.filter((p) => (p as any).category?.slug === opts.categorySlug);
+    list = list.filter((p) => p.category?.slug === opts.categorySlug);
   }
   return list;
 }
 
 export async function getProductBySlug(slug: string): Promise<Product | null> {
-  const sb = serverClient();
+  const sb = publicClient();
   if (!sb) {
     const p = demoProducts.find((p) => p.slug === slug && p.active);
     return p ? withCategory(p) : null;
