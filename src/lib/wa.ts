@@ -61,6 +61,25 @@ export async function bridgeStatus(): Promise<{ connection: string; meNumber?: s
   }
 }
 
+/** Desvincula el número de la tienda del puente (después hay que escanear un QR nuevo). */
+export async function bridgeLogout(): Promise<{ ok: boolean; error?: string }> {
+  if (!bridgeConfigured()) return { ok: false, error: "Puente no configurado" };
+  try {
+    const r = await fetch(`${BRIDGE_URL}/logout`, {
+      method: "POST",
+      headers: { "x-bridge-secret": BRIDGE_SECRET },
+      signal: AbortSignal.timeout(15000),
+      cache: "no-store",
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 404) return { ok: false, error: "El puente todavía no tiene esta opción: hay que actualizarlo" };
+    if (!r.ok || !j.ok) return { ok: false, error: j.error || `El puente respondió ${r.status}` };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: e?.message || "No se pudo contactar al puente" };
+  }
+}
+
 /** QR crudo del puente (el texto que hay que dibujar) y el estado de la conexión. */
 export async function bridgeQr(): Promise<{ connection: string; qr: string | null } | null> {
   if (!bridgeConfigured()) return null;

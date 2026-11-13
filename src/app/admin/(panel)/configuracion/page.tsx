@@ -1,10 +1,11 @@
 import { formatWaNumber } from "@/lib/format";
 import { requireAdmin } from "@/lib/admin";
 import type { StoreSettings } from "@/lib/types";
-import { saveSettings, applyConnectedNumber } from "../bot/actions";
+import { saveSettings, applyConnectedNumber, disconnectWhatsApp } from "../bot/actions";
 import { bridgeQrPage, bridgeStatus } from "@/lib/wa";
 import WaQr from "./WaQr";
 import SaveButton from "../SaveButton";
+import ConfirmButton from "../ConfirmButton";
 
 function WaStatus({ status, qr }: { status: { connection: string; meNumber?: string | null } | null; qr: string | null }) {
   if (!status) {
@@ -17,9 +18,20 @@ function WaStatus({ status, qr }: { status: { connection: string; meNumber?: str
   const open = status.connection === "open";
   return (
     <div className="text-xs rounded-lg bg-champagne/60 px-3 py-2 space-y-1">
-      <div>
-        <span className={open ? "text-thyme" : "text-rose"}>●</span>{" "}
-        {open ? `Conectado${status.meNumber ? ` (${formatWaNumber(status.meNumber)})` : ""}` : status.connection === "qr" ? "Esperando escanear el QR" : `Estado: ${status.connection}`}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <span>
+          <span className={open ? "text-thyme" : "text-rose"}>●</span>{" "}
+          {open ? `Conectado${status.meNumber ? ` (${formatWaNumber(status.meNumber)})` : ""}` : status.connection === "qr" ? "Esperando escanear el QR" : `Estado: ${status.connection}`}
+        </span>
+        {open && (
+          <ConfirmButton
+            action={disconnectWhatsApp}
+            message={"¿Desconectar este número de WhatsApp?\n\nEl bot deja de responder y no salen avisos de pedidos hasta que vincules un número de nuevo escaneando el QR."}
+            className="rounded-full border border-rose/50 text-rose px-3 py-1 text-[11px] font-medium hover:bg-rose hover:text-cream transition disabled:opacity-50"
+          >
+            Desconectar número
+          </ConfirmButton>
+        )}
       </div>
       {!open && qr && <WaQr />}
     </div>

@@ -1,7 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { adminAction } from "@/lib/admin";
-import { bridgeStatus } from "@/lib/wa";
+import { bridgeLogout, bridgeStatus } from "@/lib/wa";
 
 const TEXT_FIELDS = [
   "store_name", "whatsapp_number", "email", "address", "hours", "bot_name",
@@ -78,4 +78,12 @@ export async function applyConnectedNumber() {
   if (error) throw new Error(error.message);
   revalidatePath("/admin", "layout");
   revalidatePath("/", "layout");
+}
+
+/** Desvincula el WhatsApp de la tienda: el bot deja de atender hasta escanear un QR nuevo. */
+export async function disconnectWhatsApp() {
+  await adminAction();
+  const r = await bridgeLogout();
+  if (!r.ok) throw new Error(r.error || "No se pudo desconectar");
+  revalidatePath("/admin/configuracion");
 }
