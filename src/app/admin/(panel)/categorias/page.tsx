@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/admin";
 import type { Category } from "@/lib/types";
 import { deleteCategory, saveCategory } from "./actions";
 import ConfirmButton from "../ConfirmButton";
+import SaveButton from "../SaveButton";
 
 export default async function AdminCategoriasPage() {
   const { sb } = await requireAdmin();
@@ -51,7 +52,7 @@ export default async function AdminCategoriasPage() {
                   >
                     Eliminar
                   </ConfirmButton>
-                  <button className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</button>
+                  <SaveButton className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</SaveButton>
                 </div>
               </div>
             </form>
@@ -69,7 +70,7 @@ export default async function AdminCategoriasPage() {
           <input name="sort_order" type="number" defaultValue={cats.length + 1} className="input mb-3" />
           <label className="label">Descripción</label>
           <textarea name="description" rows={3} className="input mb-4" />
-          <button className="btn-primary w-full">Crear</button>
+          <SaveButton className="btn-primary w-full" resetOnDone doneText="✓ Creada">Crear</SaveButton>
         </form>
       </div>
     </>

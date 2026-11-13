@@ -1,8 +1,10 @@
+import { formatWaNumber } from "@/lib/format";
 import { requireAdmin } from "@/lib/admin";
 import type { StoreSettings } from "@/lib/types";
 import { saveSettings } from "../bot/actions";
 import { bridgeQrPage, bridgeStatus } from "@/lib/wa";
 import WaQr from "./WaQr";
+import SaveButton from "../SaveButton";
 
 function WaStatus({ status, qr }: { status: { connection: string; meNumber?: string | null } | null; qr: string | null }) {
   if (!status) {
@@ -17,7 +19,7 @@ function WaStatus({ status, qr }: { status: { connection: string; meNumber?: str
     <div className="text-xs rounded-lg bg-champagne/60 px-3 py-2 space-y-1">
       <div>
         <span className={open ? "text-thyme" : "text-rose"}>●</span>{" "}
-        {open ? `Conectado${status.meNumber ? ` (${status.meNumber})` : ""}` : status.connection === "qr" ? "Esperando escanear el QR" : `Estado: ${status.connection}`}
+        {open ? `Conectado${status.meNumber ? ` (${formatWaNumber(status.meNumber)})` : ""}` : status.connection === "qr" ? "Esperando escanear el QR" : `Estado: ${status.connection}`}
       </div>
       {!open && qr && <WaQr />}
     </div>
@@ -99,7 +101,7 @@ export default async function ConfiguracionPage() {
           </div>
         </section>
 
-        <button className="btn-primary">Guardar</button>
+        <SaveButton className="btn-primary">Guardar</SaveButton>
       </form>
     </>
   );

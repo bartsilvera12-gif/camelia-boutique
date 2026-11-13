@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/admin";
 import type { DeliverySlotRow, StoreSettings } from "@/lib/types";
 import ConfirmButton from "../ConfirmButton";
 import { addClosedDay, deleteSlot, removeClosedDay, saveDeliverySettings, saveSlot } from "./actions";
+import SaveButton from "../SaveButton";
 
 const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
 const hm = (t: string) => t.slice(0, 5);
@@ -47,7 +48,7 @@ export default async function EntregasPage() {
                           <div><label className="label">Hasta</label><input type="time" name="end_time" defaultValue={hm(x.end_time)} className="input !py-1.5 !w-28" /></div>
                           <div><label className="label">Cupo</label><input type="number" min={1} name="capacity" defaultValue={x.capacity} className="input !py-1.5 !w-20" /></div>
                           <label className="flex items-center gap-1.5 text-xs pb-2"><input type="checkbox" name="active" defaultChecked={x.active} /> Activo</label>
-                          <button className="btn-outline !py-1.5 !px-3 !text-xs">Guardar</button>
+                          <SaveButton className="btn-outline !py-1.5 !px-3 !text-xs">Guardar</SaveButton>
                           <ConfirmButton action={deleteSlot.bind(null, x.id)} message={`¿Eliminar el turno del ${DIAS[wd]} ${hm(x.start_time)}–${hm(x.end_time)}?`} className="text-xs text-rose hover:underline pb-2">
                             Eliminar
                           </ConfirmButton>
@@ -69,7 +70,7 @@ export default async function EntregasPage() {
               <div><label className="label">Desde</label><input type="time" name="start_time" defaultValue="09:00" required className="input !py-1.5 !w-28" /></div>
               <div><label className="label">Hasta</label><input type="time" name="end_time" defaultValue="12:00" required className="input !py-1.5 !w-28" /></div>
               <div><label className="label">Cupo</label><input type="number" min={1} name="capacity" defaultValue={5} className="input !py-1.5 !w-20" /></div>
-              <button className="btn-primary !py-1.5 !px-4 !text-xs">Agregar</button>
+              <SaveButton className="btn-primary !py-1.5 !px-4 !text-xs" doneText="✓ Agregado">Agregar</SaveButton>
             </form>
             <p className="text-[11px] text-thyme mt-2">El cupo es cuántos pedidos entran en ese horario. Los pedidos cancelados liberan su lugar.</p>
           </section>
@@ -79,7 +80,7 @@ export default async function EntregasPage() {
             <form action={addClosedDay} className="flex flex-wrap items-end gap-2 mb-3">
               <div><label className="label">Fecha</label><input type="date" name="day" required className="input !py-1.5 !w-40" /></div>
               <div className="flex-1 min-w-[160px]"><label className="label">Motivo</label><input name="reason" placeholder="Feriado, inventario…" className="input !py-1.5" /></div>
-              <button className="btn-outline !py-1.5 !px-4 !text-xs">Agregar</button>
+              <SaveButton className="btn-outline !py-1.5 !px-4 !text-xs" resetOnDone doneText="✓ Agregado">Agregar</SaveButton>
             </form>
             <ul className="text-sm divide-y divide-champagne">
               {(closed || []).map((c: any) => (
@@ -118,7 +119,7 @@ export default async function EntregasPage() {
               <textarea name="payment_methods" rows={4} defaultValue={(settings.payment_methods || []).join("\n")} className="input" />
               <p className="text-[11px] text-thyme mt-1">Uno por línea. Es lo que ofrecen el bot y el checkout.</p>
             </div>
-            <button className="btn-primary !py-2 w-full">Guardar</button>
+            <SaveButton className="btn-primary !py-2 w-full">Guardar</SaveButton>
           </form>
 
           <div className="bg-cream border border-champagne rounded-xl p-5">

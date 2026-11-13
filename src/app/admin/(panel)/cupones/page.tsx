@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/admin";
 import ConfirmButton from "../ConfirmButton";
 import { deleteCoupon, saveCoupon } from "./actions";
+import SaveButton from "../SaveButton";
 
 type CouponRow = {
   code: string;
@@ -44,7 +45,7 @@ export default async function CuponesPage() {
                   <ConfirmButton action={deleteCoupon.bind(null, c.code)} message={`¿Eliminar el cupón ${c.code}? Los pedidos que lo usaron no cambian.`} className="text-xs text-rose hover:underline">
                     Eliminar
                   </ConfirmButton>
-                  <button className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</button>
+                  <SaveButton className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</SaveButton>
                 </div>
               </div>
             </form>
@@ -62,7 +63,7 @@ export default async function CuponesPage() {
           <input name="valid_until" type="date" className="input mb-3" />
           <label className="label">Texto que ve el cliente</label>
           <input name="label" placeholder="15% off en toda la tienda" className="input mb-4" />
-          <button className="btn-primary w-full">Crear</button>
+          <SaveButton className="btn-primary w-full" resetOnDone doneText="✓ Creado">Crear</SaveButton>
         </form>
       </div>
     </>

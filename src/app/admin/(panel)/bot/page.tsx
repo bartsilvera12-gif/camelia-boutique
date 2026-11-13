@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/admin";
 import type { BotIntent, StoreSettings } from "@/lib/types";
 import ConfirmButton from "../ConfirmButton";
 import { deleteIntent, saveIntent, saveSettings, setBotEnabled } from "./actions";
+import SaveButton from "../SaveButton";
 
 const ACTIONS: { v: BotIntent["action"]; label: string; help: string }[] = [
   { v: "respuesta", label: "Responder un texto", help: "Contesta con el texto de abajo." },
@@ -62,7 +63,7 @@ export default async function BotPage() {
         <Field name="handoff_message" label="Al pasar con una persona" value={settings.handoff_message} />
         <Field name="offline_message" label="Bot apagado" value={settings.offline_message} />
         <Field name="audio_message" label="Cuando recibe un audio" value={settings.audio_message} />
-        <div className="md:col-span-2"><button className="btn-primary !py-2">Guardar mensajes</button></div>
+        <div className="md:col-span-2"><SaveButton className="btn-primary !py-2">Guardar mensajes</SaveButton></div>
       </form>
 
       <h2 className="font-serif text-2xl text-ink mb-1">Respuestas y palabras clave</h2>
@@ -134,7 +135,7 @@ function IntentForm({ i }: { i?: BotIntent }) {
             Eliminar
           </ConfirmButton>
         )}
-        <button className={(i ? "btn-outline" : "btn-primary") + " !py-1.5 !px-4 !text-xs ml-auto"}>{i ? "Guardar" : "Crear respuesta"}</button>
+        <span className="ml-auto"><SaveButton className={(i ? "btn-outline" : "btn-primary") + " !py-1.5 !px-4 !text-xs"} resetOnDone={!i} doneText={i ? "✓ Guardado" : "✓ Creada"}>{i ? "Guardar" : "Crear respuesta"}</SaveButton></span>
       </div>
     </form>
   );

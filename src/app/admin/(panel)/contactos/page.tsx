@@ -4,6 +4,7 @@ import { formatGs } from "@/lib/format";
 import type { Customer } from "@/lib/types";
 import ConfirmButton from "../ConfirmButton";
 import { deleteCustomer, saveCustomer } from "./actions";
+import SaveButton from "../SaveButton";
 
 export default async function ContactosPage({ searchParams }: { searchParams: { q?: string } }) {
   const { sb } = await requireAdmin();
@@ -56,7 +57,7 @@ export default async function ContactosPage({ searchParams }: { searchParams: { 
                     <div className="sm:col-span-2"><label className="label">Dirección</label><input name="address" defaultValue={c.address || ""} className="input" /></div>
                     <div className="sm:col-span-2"><label className="label">Notas</label><textarea name="notes" rows={2} defaultValue={c.notes || ""} className="input" /></div>
                     <div className="sm:col-span-2 flex items-center gap-4">
-                      <button className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</button>
+                      <SaveButton className="btn-outline !py-1.5 !px-4 !text-xs">Guardar</SaveButton>
                       <a href={wa(c.phone)} target="_blank" rel="noreferrer" className="text-xs text-thyme underline">Escribir por WhatsApp</a>
                       <ConfirmButton action={deleteCustomer.bind(null, c.id)} message={`¿Eliminar a ${c.name} de contactos? Sus pedidos se mantienen.`} className="ml-auto text-xs text-rose hover:underline">
                         Eliminar
@@ -80,7 +81,7 @@ export default async function ContactosPage({ searchParams }: { searchParams: { 
           <input name="email" type="email" className="input mb-3" />
           <label className="label">Notas</label>
           <textarea name="notes" rows={2} className="input mb-4" />
-          <button className="btn-primary w-full">Agregar</button>
+          <SaveButton className="btn-primary w-full" resetOnDone doneText="✓ Agregado">Agregar</SaveButton>
         </form>
       </div>
     </>

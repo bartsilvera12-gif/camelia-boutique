@@ -11,3 +11,11 @@ export function finalPrice(p: { price: number; discount?: number | null }): numb
   const d = Math.max(0, Math.min(100, p.discount || 0));
   return Math.round((p.price * (100 - d)) / 100);
 }
+
+/** "595992218503:80@s.whatsapp.net" → "+595 992 218 503". */
+export function formatWaNumber(jid?: string | null): string {
+  const d = String(jid || "").split(/[:@]/)[0].replace(/\D/g, "");
+  if (!d) return "";
+  const m = d.match(/^595(\d{3})(\d{3})(\d{3})$/);
+  return m ? `+595 ${m[1]} ${m[2]} ${m[3]}` : `+${d}`;
+}

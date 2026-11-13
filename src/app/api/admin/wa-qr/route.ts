@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import QRCode from "qrcode";
 import { adminAction } from "@/lib/admin";
 import { bridgeQr, bridgeStatus } from "@/lib/wa";
+import { formatWaNumber } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function GET() {
 
   if (q.connection === "open") {
     const s = await bridgeStatus();
-    return NextResponse.json({ ok: true, connection: "open", number: s?.meNumber ?? null });
+    return NextResponse.json({ ok: true, connection: "open", number: s?.meNumber ? formatWaNumber(s.meNumber) : null });
   }
   if (!q.qr) return NextResponse.json({ ok: true, connection: q.connection, svg: null });
 
