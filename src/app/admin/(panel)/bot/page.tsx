@@ -58,6 +58,14 @@ export default async function BotPage() {
             <span className="block text-[11px] text-thyme">Recomendado al principio: dejarlo apagado para que una persona confirme cada pedido.</span>
           </span>
         </label>
+        <div className="md:col-span-2">
+          <label className="label">Si el equipo deja de responder un chat, el bot vuelve a atender después de (minutos)</label>
+          <input name="human_pause_minutes" type="number" min={0} max={10080} defaultValue={settings.human_pause_minutes ?? 120} className="input md:w-40" />
+          <p className="text-[11px] text-thyme mt-1">
+            Cuando alguien escribe desde el celular de la tienda o toma la conversación en el panel, el bot se calla en ese chat.
+            Pasado este tiempo sin mensajes del equipo, vuelve a responder solo. 0 = nunca (hay que tocar “Devolver al bot”).
+          </p>
+        </div>
         <Field name="welcome_message" label="Saludo inicial" value={settings.welcome_message} />
         <Field name="fallback_message" label="Cuando no entiende" value={settings.fallback_message} />
         <Field name="handoff_message" label="Al pasar con una persona" value={settings.handoff_message} />

@@ -39,7 +39,10 @@ export function botOrderCreator(
         notes: source === "whatsapp" ? "Pedido tomado por el bot de WhatsApp" : "Pedido tomado por el bot de la web",
         conversation_id: conv.id,
         conversation_token: conv.token,
-        items: [{ product_id: o.productId, size: o.size || null, qty: o.qty }],
+        items: [
+          { product_id: o.productId, size: o.size || null, qty: o.qty },
+          ...(o.extra ? [{ product_id: o.extra.productId, size: o.extra.size || null, qty: o.extra.qty }] : []),
+        ],
       },
     });
     if (error) return { ok: false, error: error.message };
@@ -48,7 +51,10 @@ export function botOrderCreator(
       if (onCreated) await onCreated(r.order_id);
       return { ok: true, orderId: r.order_id, total: Number(r.total), status: r.status };
     }
-    if (r?.error === "stock") return { ok: false, shortage: { available: Number(r.shortages?.[0]?.available ?? 0) } };
+    if (r?.error === "stock") {
+      const sh = r.shortages?.[0];
+      return { ok: false, shortage: { available: Number(sh?.available ?? 0), productId: sh?.product_id } };
+    }
     if (r?.error === "slot_full" || r?.error === "slot") return { ok: false, slotTaken: true };
     return { ok: false, error: r?.error };
   };

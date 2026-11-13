@@ -1,6 +1,7 @@
 "use server";
 import { revalidatePath } from "next/cache";
 import { adminAction } from "@/lib/admin";
+import { bridgeStatus } from "@/lib/wa";
 
 const TEXT_FIELDS = [
   "store_name", "whatsapp_number", "email", "address", "hours", "bot_name",
@@ -17,12 +18,16 @@ export async function saveSettings(fd: FormData) {
   // checkboxes: el form marca cuáles maneja con un hidden "_bools"
   const bools = String(fd.get("_bools") || "").split(",").filter(Boolean);
   for (const f of BOOL_FIELDS) if (bools.includes(f)) patch[f] = fd.get(f) === "on";
+  if (fd.has("human_pause_minutes")) {
+    patch.human_pause_minutes = Math.max(0, Math.min(10080, Math.round(Number(fd.get("human_pause_minutes") || 0))));
+  }
   for (const f of ["store_name", "whatsapp_number", "hours", "bot_name", "welcome_message", "fallback_message", "handoff_message", "offline_message", "audio_message"]) {
     if (f in patch && !patch[f]) delete patch[f]; // obligatorios: no se vacían
   }
   const { error } = await sb.from("settings").update(patch).eq("id", 1);
   if (error) throw new Error(error.message);
   revalidatePath("/admin", "layout");
+  revalidatePath("/", "layout");
 }
 
 export async function setBotEnabled(on: boolean) {
@@ -61,4 +66,16 @@ export async function deleteIntent(id: string) {
   const { error } = await sb.from("bot_intents").delete().eq("id", id);
   if (error) throw new Error(error.message);
   revalidatePath("/admin/bot");
+}
+
+/** Pone en los botones de la tienda el número que está vinculado al puente. */
+export async function applyConnectedNumber() {
+  const { sb } = await adminAction();
+  const st = await bridgeStatus();
+  const digits = st?.connection === "open" ? String(st.meNumber || "").split(/[:@]/)[0].replace(/\D/g, "") : "";
+  if (!digits) throw new Error("El WhatsApp no está conectado");
+  const { error } = await sb.from("settings").update({ whatsapp_number: digits }).eq("id", 1);
+  if (error) throw new Error(error.message);
+  revalidatePath("/admin", "layout");
+  revalidatePath("/", "layout");
 }

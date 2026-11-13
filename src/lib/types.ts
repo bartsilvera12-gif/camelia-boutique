@@ -165,6 +165,7 @@ export type StoreSettings = {
   pickup_enabled?: boolean;
   delivery_lead_days?: number;
   delivery_days_ahead?: number;
+  human_pause_minutes?: number;
 };
 
 /** Turno de entrega con lugar libre (sale de available_slots()). */

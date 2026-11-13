@@ -1,7 +1,7 @@
 import { formatWaNumber } from "@/lib/format";
 import { requireAdmin } from "@/lib/admin";
 import type { StoreSettings } from "@/lib/types";
-import { saveSettings } from "../bot/actions";
+import { saveSettings, applyConnectedNumber } from "../bot/actions";
 import { bridgeQrPage, bridgeStatus } from "@/lib/wa";
 import WaQr from "./WaQr";
 import SaveButton from "../SaveButton";
@@ -32,11 +32,27 @@ export default async function ConfiguracionPage() {
   const s = (data || {}) as StoreSettings;
   const wa = await bridgeStatus();
   const qr = bridgeQrPage();
+  // número vinculado al puente vs. el que usan los botones de la tienda
+  const conectado = wa?.connection === "open" && wa.meNumber ? String(wa.meNumber).split(/[:@]/)[0].replace(/\D/g, "") : null;
+  const tienda = String(s.whatsapp_number || "").replace(/\D/g, "").replace(/^0/, "595");
+  const distinto = !!conectado && conectado !== tienda;
 
   return (
     <>
       <h1 className="font-serif text-3xl text-ink mb-1">Configuración</h1>
       <p className="text-sm text-thyme mb-6">Datos del negocio que usa el bot para responder, y a quién avisar de los pedidos.</p>
+
+      {distinto && (
+        <form action={applyConnectedNumber} className="max-w-3xl mb-6 rounded-xl border border-rose/40 bg-blush/30 p-4 flex flex-wrap items-center gap-3 text-sm">
+          <p className="flex-1 min-w-[240px]">
+            Los botones de WhatsApp de la tienda mandan al <b>{formatWaNumber(tienda)}</b>, pero el número conectado
+            al bot es el <b>{formatWaNumber(conectado)}</b>. Los mensajes que lleguen al otro número no los atiende el bot.
+          </p>
+          <SaveButton className="btn-primary !py-2 !px-4 !text-xs" doneText="✓ Actualizado">
+            Usar {formatWaNumber(conectado)}
+          </SaveButton>
+        </form>
+      )}
 
       <form action={saveSettings} className="max-w-3xl space-y-6">
         <section className="bg-cream border border-champagne rounded-xl p-5 grid md:grid-cols-2 gap-4">
@@ -47,7 +63,10 @@ export default async function ConfiguracionPage() {
           </div>
           <div>
             <label className="label">WhatsApp de la tienda</label>
-            <input name="whatsapp_number" defaultValue={s.whatsapp_number} className="input" placeholder="595981000000" />
+            <input name="whatsapp_number" defaultValue={s.whatsapp_number} className="input" placeholder="0992 218 503" />
+            <p className="text-[11px] text-thyme mt-1">
+              A este número mandan los botones de WhatsApp de la web y aparece en el pie de página. Tiene que ser el vinculado al bot.
+            </p>
           </div>
           <div>
             <label className="label">Email</label>

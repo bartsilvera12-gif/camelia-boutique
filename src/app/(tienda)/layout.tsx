@@ -12,7 +12,7 @@ export default async function TiendaLayout({ children }: { children: React.React
     <StoreProvider value={{ whatsappNumber: settings?.whatsapp_number ?? null }}>
       <Header />
       <main>{children}</main>
-      <Footer />
+      <Footer whatsapp={settings?.whatsapp_number} />
       <KeycapButton />
       <Toast />
       <ChatWidget />

@@ -83,9 +83,11 @@ export function bridgeQrPage() {
 }
 
 /** Mensaje del bot para WhatsApp: los botones pasan a ser una lista numerada. */
-export function formatForWhatsApp(body: string, options?: ChatOption[] | null): string {
+export function formatForWhatsApp(body: string, options?: ChatOption[] | null, letters = false): string {
   if (!options?.length) return body;
-  return `${body}\n\n${options.map((o, i) => `*${i + 1}.* ${o.label}`).join("\n")}\n\n_Respondé con el número._`;
+  // con letras (A, B…) cuando el cliente también puede escribir un número (ej. una cantidad)
+  const mark = (i: number) => (letters ? String.fromCharCode(65 + i) : String(i + 1));
+  return `${body}\n\n${options.map((o, i) => `*${mark(i)}.* ${o.label}`).join("\n")}\n\n_Respondé con ${letters ? "la letra" : "el número"}._`;
 }
 
 const SOURCE: Record<string, string> = { web: "la web", bot: "el bot de la web", whatsapp: "el bot de WhatsApp" };

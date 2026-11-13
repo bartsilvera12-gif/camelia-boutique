@@ -1,4 +1,6 @@
 import NavLink from "./NavLink";
+import { waNumber } from "@/lib/whatsapp";
+import { formatWaNumber } from "@/lib/format";
 import Ornament from "./Ornament";
 
 /** Mariposa minimalista — 4 alas ovaladas + cuerpo */
@@ -28,7 +30,8 @@ function ButterflyIcon() {
   );
 }
 
-export default function Footer() {
+export default function Footer({ whatsapp }: { whatsapp?: string | null }) {
+  const waDigits = waNumber(whatsapp);
   return (
     <footer className="relative overflow-hidden bg-thyme text-champagne mt-20">
       {/* Ornamento decorativo */}
@@ -105,8 +108,8 @@ export default function Footer() {
               </a>
             </li>
             <li>
-              <a href="https://wa.me/595981772872" target="_blank" rel="noreferrer" className="hover:text-blush transition-colors">
-                +595 981 772 872
+              <a href={`https://wa.me/${waDigits}`} target="_blank" rel="noreferrer" className="hover:text-blush transition-colors">
+                {formatWaNumber(waDigits)}
               </a>
             </li>
             <li>Asunción, Paraguay</li>

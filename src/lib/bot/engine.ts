@@ -9,13 +9,19 @@ import {
 
 type Step =
   | "order_product" | "order_size" | "order_qty" | "order_mode" | "order_slot" | "order_address"
-  | "order_name" | "order_phone" | "order_payment" | "order_confirm";
+  | "order_name" | "order_phone" | "order_payment" | "order_confirm" | "order_fill_size";
+
+/** Segundo producto para completar la cantidad cuando no alcanza el stock del primero. */
+export type ExtraItem = { productId: string; size?: string; qty: number };
 
 export type BotState = {
   step?: Step;
   productId?: string;
   size?: string;
   qty?: number;
+  wantQty?: number;     // cantidad que pidió cuando no alcanzaba el stock
+  extra?: ExtraItem;    // producto parecido para completar
+  fillId?: string;      // producto de relleno esperando talle
   mode?: "envio" | "retiro";
   date?: string;
   slotId?: string;
@@ -28,12 +34,14 @@ export type BotState = {
   offlineSent?: boolean;
 };
 
-export type BotOut = { body: string; options?: ChatOption[] };
+// letters: en WhatsApp las opciones van con letras (A, B…) para no confundirlas con una cantidad
+export type BotOut = { body: string; options?: ChatOption[]; letters?: boolean };
 
 export type OrderRequest = {
   productId: string;
   size?: string;
   qty: number;
+  extra?: ExtraItem;
   date: string;
   slotId: string;
   mode: "envio" | "retiro";
@@ -45,7 +53,7 @@ export type OrderRequest = {
 
 export type OrderResult =
   | { ok: true; orderId: string; total: number; status: string }
-  | { ok: false; shortage?: { available: number }; slotTaken?: boolean; error?: string };
+  | { ok: false; shortage?: { available: number; productId?: string }; slotTaken?: boolean; error?: string };
 
 export type BotInput = {
   text: string;
@@ -345,6 +353,7 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   function clearOrder(s: BotState): BotState {
     return {
       ...s, step: undefined, productId: undefined, size: undefined, qty: undefined, mode: undefined, date: undefined,
+      wantQty: undefined, extra: undefined, fillId: undefined,
       slotId: undefined, slotLabel: undefined, payment: undefined, misses: 0,
     };
   }
@@ -352,6 +361,14 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   function startOrder(p: Product, base: BotState): BotResult {
     if (p.stock <= 0) return say(showProduct(p, products), { ...base, step: undefined });
     return next({ ...clearOrder(base), productId: p.id });
+  }
+
+  /** Productos parecidos con stock: misma categoría, precio más cercano primero. */
+  function similares(p: Product): Product[] {
+    return products
+      .filter((x) => x.id !== p.id && x.stock > 0 && x.active !== false && x.category_id === p.category_id)
+      .sort((a, b) => Math.abs(finalPrice(a) - finalPrice(p)) - Math.abs(finalPrice(b) - finalPrice(p)))
+      .slice(0, 3);
   }
 
   /** Pregunta lo primero que falte del pedido. */
@@ -365,8 +382,8 @@ export async function runBot(input: BotInput): Promise<BotResult> {
       }, { ...s, step: "order_size" });
     }
     if (!s.qty) {
-      const opts = [1, 2, 3].filter((q) => q <= p.stock).map((q) => ({ label: String(q), value: `qty:${q}` }));
-      return say({ body: `${productLine(p)}.\n¿Cuántas unidades querés?`, options: opts }, { ...s, step: "order_qty" });
+      const hay = p.stock === 1 ? "queda 1" : `hay ${p.stock} disponibles`;
+      return say({ body: `¿Cuántas querés? Escribí el número (${hay}).` }, { ...s, step: "order_qty" });
     }
     if (!s.mode) {
       if (!pickup) return next({ ...s, mode: "envio" });
@@ -399,13 +416,19 @@ export async function runBot(input: BotInput): Promise<BotResult> {
         options: payments.map((m) => ({ label: m, value: `pay:${m}` })),
       }, { ...s, step: "order_payment" });
     }
-    const total = finalPrice(p) * s.qty;
+    const ex = s.extra ? products.find((x) => x.id === s.extra!.productId) : undefined;
+    const total = finalPrice(p) * s.qty + (ex && s.extra ? finalPrice(ex) * s.extra.qty : 0);
+    const lineaExtra = ex && s.extra
+      ? `• ${s.extra.qty} × ${ex.name}${s.extra.size ? ` (talle ${s.extra.size})` : ""} — ${formatGs(finalPrice(ex) * s.extra.qty)}\n`
+      : "";
     const entrega = s.mode === "retiro"
       ? `Retiro en el local${settings.address ? ` (${settings.address})` : ""}`
       : `Envío a ${s.address}`;
     return say({
       body:
-        `Entendí esto:\n• ${s.qty} × ${p.name}${s.size ? ` (talle ${s.size})` : ""} — ${formatGs(total)}\n• ${entrega}\n• ${s.slotLabel}\n` +
+        `Entendí esto:\n• ${s.qty} × ${p.name}${s.size ? ` (talle ${s.size})` : ""} — ${formatGs(finalPrice(p) * s.qty)}\n` + lineaExtra +
+        (lineaExtra ? `• Total: ${formatGs(total)}\n` : "") +
+        `• ${entrega}\n• ${s.slotLabel}\n` +
         (s.payment ? `• Pago: ${s.payment}\n` : "") +
         `• A nombre de ${s.name} (${s.phone})\n¿Es correcto?`,
       options: [
@@ -482,16 +505,58 @@ export async function runBot(input: BotInput): Promise<BotResult> {
       }
       case "order_qty": {
         if (!p) return null;
-        const q = k === "qty" ? +v : parseQty(txt);
-        if (!q || q <= 0) return say({ body: "Decime la cantidad con un número, por ejemplo 2." }, s);
         if (p.stock <= 0) return say(showProduct(p, products), clearOrder(s));
-        if (q > p.stock) {
-          return say({
-            body: `Solo tenemos ${p.stock} ${p.stock === 1 ? "unidad" : "unidades"} de ${p.name}. ¿Querés llevar ${p.stock}?`,
-            options: [{ label: `Sí, ${p.stock}`, value: `qty:${p.stock}` }, { label: "Elegir otro producto", value: "menu:productos" }],
-          }, s);
+        // eligió completar con un producto parecido
+        if (k === "fill") {
+          const f = products.find((x) => x.id === v && x.stock > 0);
+          const faltan = (s.wantQty || 0) - p.stock;
+          if (!f || faltan <= 0) return say({ body: "Escribí la cantidad con un número, por ejemplo 2." }, s);
+          const base: BotState = { ...s, qty: p.stock, wantQty: undefined };
+          const extra: ExtraItem = { productId: f.id, qty: Math.min(faltan, f.stock) };
+          if (f.sizes?.length) {
+            const mismo = s.size ? f.sizes.find((t) => t.toUpperCase() === s.size!.toUpperCase()) : undefined;
+            if (mismo) return next({ ...base, extra: { ...extra, size: mismo } });
+            return say({
+              body: `¿Qué talle de *${f.name}*?`,
+              options: f.sizes.map((t) => ({ label: t, value: `size:${t}` })),
+            }, { ...base, extra, fillId: f.id, step: "order_fill_size" });
+          }
+          return next({ ...base, extra });
         }
-        return next({ ...s, qty: q });
+        const q = k === "qty" ? +v : parseQty(txt);
+        if (!q || q <= 0) return say({ body: "Escribí la cantidad con un número, por ejemplo 2." }, s);
+        if (q > p.stock) {
+          const faltan = q - p.stock;
+          const sim = similares(p);
+          const unidades = p.stock === 1 ? "1 unidad" : `${p.stock} unidades`;
+          const body =
+            `No se puede: de *${p.name}* solo tenemos ${unidades} y pediste ${q}.` +
+            (sim.length
+              ? `\nPodés llevar ${p.stock === 1 ? "esa" : `las ${p.stock}`} y completar ${faltan === 1 ? "la que falta" : `las ${faltan} que faltan`} con algo parecido:\n` +
+                sim.map((x) => `• ${productLine(x)}`).join("\n")
+              : `\n¿Querés llevar ${p.stock === 1 ? "esa" : `las ${p.stock}`}?`) +
+            `\nO escribí otra cantidad.`;
+          return say({
+            body,
+            letters: true,
+            options: [
+              { label: `Llevar ${p.stock}`, value: `qty:${p.stock}` },
+              ...sim.map((x) => ({ label: `Completar con ${x.name} (${Math.min(faltan, x.stock)})`, value: `fill:${x.id}` })),
+            ],
+          }, { ...s, wantQty: q });
+        }
+        return next({ ...s, qty: q, wantQty: undefined, extra: undefined });
+      }
+      case "order_fill_size": {
+        const f = products.find((x) => x.id === s.fillId);
+        if (!f || !s.extra) return next({ ...s, step: undefined, fillId: undefined, extra: undefined });
+        const sizes = f.sizes || [];
+        const want = k === "size" ? v : txt.replace(/^talle\s*/i, "").trim();
+        const size = sizes.find((t) => t.toUpperCase() === want.toUpperCase());
+        if (!size) {
+          return say({ body: "Ese talle no lo tenemos. Elegí uno de estos:", options: sizes.map((t) => ({ label: t, value: `size:${t}` })) }, s);
+        }
+        return next({ ...s, extra: { ...s.extra, size }, fillId: undefined });
       }
       case "order_mode": {
         const mode = k === "mode" ? v
@@ -545,7 +610,7 @@ export async function runBot(input: BotInput): Promise<BotResult> {
         }
         if (v === "si" || isYes(txt)) {
           const res = await input.createOrder({
-            productId: p.id, size: s.size, qty: s.qty!, date: s.date!, slotId: s.slotId!, mode: s.mode!,
+            productId: p.id, size: s.size, qty: s.qty!, extra: s.extra, date: s.date!, slotId: s.slotId!, mode: s.mode!,
             address: s.address, payment: s.payment || payments[0] || "A coordinar", name: s.name!, phone: s.phone!,
           });
           if (res.ok) {
@@ -566,13 +631,15 @@ export async function runBot(input: BotInput): Promise<BotResult> {
           }
           if (res.shortage) {
             const avail = res.shortage.available;
-            if (avail <= 0) {
+            const cual = products.find((x) => x.id === res.shortage!.productId) || p;
+            if (cual.id === p.id && avail <= 0) {
               return say({ body: `Uy, justo se agotó *${p.name}*. ¿Querés ver otros productos?`, options: [{ label: "Ver productos", value: "menu:productos" }] }, clearOrder(s));
             }
-            return say({
-              body: `Uy, justo cambió el stock: ahora quedan ${avail} de ${p.name}. ¿Cuántas querés?`,
-              options: Array.from({ length: Math.min(avail, 3) }, (_, i) => ({ label: String(i + 1), value: `qty:${i + 1}` })),
-            }, { ...s, step: "order_qty", qty: undefined });
+            p.stock = cual.id === p.id ? avail : p.stock;
+            return say(
+              { body: `Uy, justo cambió el stock de *${cual.name}* (${avail === 1 ? "queda 1" : `quedan ${avail}`}). Escribí de nuevo cuántas querés de ${p.name}.` },
+              { ...s, step: "order_qty", qty: undefined, extra: undefined, wantQty: undefined }
+            );
           }
           return handoff(clearOrder(s), "No pude guardar el pedido por un problema técnico. Te paso con una persona del equipo.");
         }

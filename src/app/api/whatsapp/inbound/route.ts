@@ -22,7 +22,7 @@ type Inbound = {
   pushName?: string | null;
 };
 
-type WaState = BotState & { waOptions?: { label: string; value: string }[] };
+type WaState = BotState & { waOptions?: { label: string; value: string }[]; waLetters?: boolean };
 
 const ok = (extra: object = {}) => NextResponse.json({ ok: true, ...extra });
 
@@ -110,11 +110,14 @@ export async function POST(req: Request) {
   const { settings, intents, products, slots } = await loadBotData(sb);
   const state = (c.state || {}) as WaState;
 
-  // "2" → la opción 2 de la última lista numerada que mandó el bot
+  // "2" → la opción 2 de la última lista que mandó el bot; si la lista era con letras,
+  // "B" → la opción B (y un número se toma como lo que es, por ejemplo una cantidad)
   let value: string | undefined;
-  const num = text.match(/^\s*(\d{1,2})\s*\.?\s*$/);
-  if (num && state.waOptions?.length) {
-    const opt = state.waOptions[Number(num[1]) - 1];
+  if (state.waOptions?.length) {
+    const idx = state.waLetters
+      ? (/^\s*([a-z])\s*[.)]?\s*$/i.exec(text)?.[1]?.toUpperCase().charCodeAt(0) ?? 0) - 65
+      : Number(/^\s*(\d{1,2})\s*\.?\s*$/.exec(text)?.[1] ?? 0) - 1;
+    const opt = idx >= 0 ? state.waOptions[idx] : undefined;
     if (opt) value = opt.value;
   }
 
@@ -132,9 +135,13 @@ export async function POST(req: Request) {
     createOrder: botOrderCreator(sb, c, "whatsapp", notifyNewOrder),
   });
 
-  const lastOptions = [...result.messages].reverse().find((x) => x.options?.length)?.options;
-  const newState: WaState = { ...result.state, waOptions: lastOptions || [] };
-  const outgoing = result.messages.map((x) => formatForWhatsApp(x.body, x.options));
+  const lastWithOptions = [...result.messages].reverse().find((x) => x.options?.length);
+  const newState: WaState = {
+    ...result.state,
+    waOptions: lastWithOptions?.options || [],
+    waLetters: !!lastWithOptions?.letters,
+  };
+  const outgoing = result.messages.map((x) => formatForWhatsApp(x.body, x.options, x.letters));
 
   // primero se guarda (así el eco de nuestros envíos se reconoce) y después se envía
   await sb.rpc("chat_append", {

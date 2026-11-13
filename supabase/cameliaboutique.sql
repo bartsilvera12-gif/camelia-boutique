@@ -250,6 +250,7 @@ alter table cameliaboutique.settings add column if not exists payment_methods te
 alter table cameliaboutique.settings add column if not exists pickup_enabled      boolean not null default true;
 alter table cameliaboutique.settings add column if not exists delivery_lead_days  integer not null default 0;  -- días mínimos de anticipación
 alter table cameliaboutique.settings add column if not exists delivery_days_ahead integer not null default 14; -- hasta cuántos días adelante se ofrecen turnos
+alter table cameliaboutique.settings add column if not exists human_pause_minutes integer not null default 120; -- 0 = el bot no retoma solo
 
 -- ---------------------------------------------------------------------
 --  updated_at
@@ -488,6 +489,45 @@ exception
 end $$;
 
 -- ---------------------------------------------------------------------
+--  PAUSA DEL BOT: cuando una persona del equipo atiende un chat, el bot se
+--  calla. Si el equipo no escribe nada en ese chat durante
+--  settings.human_pause_minutes, el bot vuelve a atender solo.
+-- ---------------------------------------------------------------------
+alter table cameliaboutique.conversations add column if not exists human_since timestamptz;
+
+create or replace function cameliaboutique.conv_human_since()
+returns trigger language plpgsql set search_path = cameliaboutique, pg_temp as $$
+begin
+  if new.status = 'humano' and (tg_op = 'INSERT' or old.status is distinct from 'humano') then
+    new.human_since := now();
+  elsif new.status <> 'humano' then
+    new.human_since := null;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_conv_human_since on cameliaboutique.conversations;
+create trigger trg_conv_human_since before insert or update of status on cameliaboutique.conversations
+  for each row execute function cameliaboutique.conv_human_since();
+
+create or replace function cameliaboutique.resume_bot_if_idle(p_id uuid)
+returns void language plpgsql security definer
+set search_path = cameliaboutique, pg_temp as $$
+declare v_min integer;
+begin
+  select human_pause_minutes into v_min from cameliaboutique.settings where id = 1;
+  if coalesce(v_min, 0) <= 0 then return; end if;
+  update cameliaboutique.conversations c
+     set status = 'bot', needs_human = false, taken_by = null, state = '{}'::jsonb
+   where c.id = p_id and c.status = 'humano'
+     and greatest(
+           coalesce(c.human_since, c.created_at),
+           coalesce((select max(m.created_at) from cameliaboutique.messages m
+                      where m.conversation_id = c.id and m.sender = 'agente'), c.created_at)
+         ) < now() - make_interval(mins => v_min);
+end $$;
+
+-- ---------------------------------------------------------------------
 --  RPCs del chat (el visitante solo accede a SU conversación con token)
 -- ---------------------------------------------------------------------
 
@@ -559,6 +599,10 @@ declare c cameliaboutique.conversations;
 begin
   if p_id is not null then
     select * into c from cameliaboutique.conversations where id = p_id and token = p_token;
+    if c.id is not null and c.status = 'humano' then
+      perform cameliaboutique.resume_bot_if_idle(c.id);
+      select * into c from cameliaboutique.conversations where id = c.id;
+    end if;
   end if;
   if c.id is null then
     insert into cameliaboutique.conversations (channel)
@@ -697,6 +741,10 @@ begin
   end if;
 
   select * into c from cameliaboutique.conversations where channel = 'whatsapp' and wa_id = p_wa_id;
+  if c.id is not null and c.status = 'humano' then
+    perform cameliaboutique.resume_bot_if_idle(c.id);
+    select * into c from cameliaboutique.conversations where id = c.id;
+  end if;
   if c.id is null then
     insert into cameliaboutique.conversations (channel, wa_id, visitor_name, visitor_phone)
     values ('whatsapp', p_wa_id, nullif(p_name, ''), coalesce(nullif(p_phone, ''), p_wa_id))
@@ -953,6 +1001,9 @@ begin
     update cameliaboutique.settings set v2_data_applied = true where id = 1;
   end if;
 end $$;
+
+update cameliaboutique.conversations set human_since = last_message_at
+ where status = 'humano' and human_since is null;
 
 -- Para el realtime del panel no hace falta nada: el panel consulta cada pocos segundos.
 -- Exponer el schema: agregar "cameliaboutique" a PGRST_DB_SCHEMAS y reiniciar rest.
