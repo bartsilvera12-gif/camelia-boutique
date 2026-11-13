@@ -9,7 +9,7 @@ import { Avatar, prettyPhone, shortTime } from "./ui";
 
 const FILTERS = [
   { k: "todas", label: "Todas" },
-  { k: "persona", label: "Piden persona" },
+  { k: "persona", label: "Persona" },
   { k: "equipo", label: "Equipo" },
   { k: "bot", label: "Bot" },
   { k: "cerradas", label: "Cerradas" },
@@ -90,20 +90,37 @@ export default function ConversationList() {
             className="w-full rounded-full bg-[#FBF7F1] border border-champagne pl-9 pr-3 py-2 text-sm outline-none focus:border-thyme"
           />
         </div>
-        <div className="thin-scroll flex gap-1.5 mt-3 overflow-x-auto pb-1 -mx-1 px-1">
-          {FILTERS.map((f) => (
-            <button
-              key={f.k}
-              onClick={() => setFilter(f.k)}
-              className={
-                "shrink-0 whitespace-nowrap text-[12px] rounded-full px-3 py-1 border transition " +
-                (filter === f.k ? "bg-thyme text-champagne border-thyme" : "border-champagne text-ink/75 hover:border-thyme/60")
-              }
-            >
-              {f.label}
-              {counts[f.k] > 0 && <span className={"ml-1 " + (filter === f.k ? "text-champagne/70" : "text-thyme")}>{counts[f.k]}</span>}
-            </button>
-          ))}
+        <div role="tablist" aria-label="Filtrar conversaciones" className="flex gap-0.5 mt-3 p-1 rounded-xl bg-[#F3ECE1]">
+          {FILTERS.map((f) => {
+            const on = filter === f.k;
+            const n = counts[f.k];
+            const alerta = f.k === "persona" && n > 0;
+            return (
+              <button
+                key={f.k}
+                role="tab"
+                aria-selected={on}
+                onClick={() => setFilter(f.k)}
+                title={f.k === "persona" ? "Piden hablar con una persona" : undefined}
+                className={
+                  "relative flex-auto flex items-center justify-center gap-1 rounded-lg px-1.5 py-1.5 text-[11.5px] whitespace-nowrap transition " +
+                  (on ? "bg-cream text-ink shadow-sm font-medium" : "text-ink/60 hover:text-ink")
+                }
+              >
+                {f.label}
+                {n > 0 && (
+                  <span
+                    className={
+                      "min-w-[16px] h-4 px-1 rounded-full text-[9.5px] leading-4 text-center font-semibold " +
+                      (alerta ? "bg-rose text-cream" : on ? "bg-thyme text-champagne" : "bg-ink/10 text-ink/60")
+                    }
+                  >
+                    {n > 99 ? "99+" : n}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
