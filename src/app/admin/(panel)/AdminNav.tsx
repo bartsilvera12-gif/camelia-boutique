@@ -85,14 +85,14 @@ export default function AdminNav({ email, logout }: { email: string; logout: () 
 
   const panel = (
     <div className="flex flex-col h-full">
-      <div className="px-5 pt-6 pb-5">
+      <div className="px-5 pt-6 pb-4">
         <div className="font-serif text-[28px] leading-none text-champagne">
           Camélia<span className="text-blush">.</span>
         </div>
         <div className="text-[10px] uppercase tracking-[0.3em] text-champagne/60 mt-1.5">Panel de la tienda</div>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3 pb-4 space-y-5">
+      <nav className="nav-scroll flex-1 overflow-y-auto px-3 pb-3 space-y-4">
         {GROUPS.map((g) => (
           <div key={g.title}>
             <div className="px-3 mb-1.5 text-[10px] uppercase tracking-[0.24em] text-champagne/45">{g.title}</div>
@@ -106,7 +106,7 @@ export default function AdminNav({ email, logout }: { email: string; logout: () 
                     key={l.href}
                     href={l.href}
                     className={
-                      "group relative flex items-center gap-3 rounded-xl px-3 py-2 text-[13.5px] transition-colors " +
+                      "group relative flex items-center gap-3 rounded-xl px-3 py-[7px] text-[13.5px] transition-colors " +
                       (active
                         ? "bg-champagne text-ink shadow-sm"
                         : "text-champagne/80 hover:bg-white/10 hover:text-champagne")
@@ -127,7 +127,7 @@ export default function AdminNav({ email, logout }: { email: string; logout: () 
         ))}
       </nav>
 
-      <div className="border-t border-white/10 p-3 space-y-1">
+      <div className="border-t border-white/10 px-3 py-2 space-y-0.5">
         <a
           href="/"
           target="_blank"

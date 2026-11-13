@@ -160,7 +160,7 @@ export default async function ConversacionPage({ params }: { params: { id: strin
           status={c.status}
           channel={c.channel}
         />
-        <aside className="hidden xl:block w-[300px] shrink-0 border-l border-champagne bg-cream overflow-y-auto p-5">{ficha}</aside>
+        <aside className="thin-scroll hidden xl:block w-[300px] shrink-0 border-l border-champagne bg-cream overflow-y-auto p-5">{ficha}</aside>
       </div>
     </div>
   );

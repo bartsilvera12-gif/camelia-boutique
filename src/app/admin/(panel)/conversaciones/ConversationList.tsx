@@ -90,7 +90,7 @@ export default function ConversationList() {
             className="w-full rounded-full bg-[#FBF7F1] border border-champagne pl-9 pr-3 py-2 text-sm outline-none focus:border-thyme"
           />
         </div>
-        <div className="flex gap-1.5 mt-3 overflow-x-auto pb-0.5 -mx-1 px-1">
+        <div className="thin-scroll flex gap-1.5 mt-3 overflow-x-auto pb-1 -mx-1 px-1">
           {FILTERS.map((f) => (
             <button
               key={f.k}
@@ -107,7 +107,7 @@ export default function ConversationList() {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="thin-scroll flex-1 overflow-y-auto">
         {error && <div className="m-3 text-xs bg-blush/40 rounded-lg p-3">{error}</div>}
         {list === null && !error && (
           <div className="p-3 space-y-2">

@@ -155,3 +155,24 @@ input[type="radio"] {
   background-size: 22px 22px, 22px 22px;
   background-position: 0 0, 11px 11px;
 }
+
+/* Barras de desplazamiento finitas del panel (en vez de la gris de Windows) */
+.nav-scroll,
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+.nav-scroll { scrollbar-color: transparent transparent; }
+.nav-scroll:hover { scrollbar-color: rgba(251, 234, 214, 0.28) transparent; }
+.thin-scroll { scrollbar-color: rgba(107, 117, 86, 0.25) transparent; }
+
+.nav-scroll::-webkit-scrollbar,
+.thin-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+.nav-scroll::-webkit-scrollbar-track,
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.nav-scroll::-webkit-scrollbar-button,
+.thin-scroll::-webkit-scrollbar-button { display: none; height: 0; }
+.nav-scroll::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+.nav-scroll:hover::-webkit-scrollbar-thumb { background: rgba(251, 234, 214, 0.28); }
+.thin-scroll::-webkit-scrollbar-thumb { background: rgba(107, 117, 86, 0.22); border-radius: 999px; }
+.thin-scroll::-webkit-scrollbar-thumb:hover { background: rgba(107, 117, 86, 0.4); }
