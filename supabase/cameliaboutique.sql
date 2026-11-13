@@ -128,11 +128,17 @@ create table if not exists cameliaboutique.messages (
   id              uuid primary key default gen_random_uuid(),
   conversation_id uuid not null references cameliaboutique.conversations(id) on delete cascade,
   sender          text not null check (sender in ('cliente','bot','agente')),
-  kind            text not null default 'texto' check (kind in ('texto','audio')),
+  kind            text not null default 'texto' check (kind in ('texto','audio','imagen')),
   body            text not null,
   options         jsonb,                     -- botones que mostró el bot
   created_at      timestamptz not null default now()
 );
+-- fotos que manda el cliente por WhatsApp (bucket privado cameliaboutique-chat)
+alter table cameliaboutique.messages add column if not exists wa_message_id text;
+alter table cameliaboutique.messages add column if not exists media_path text;
+alter table cameliaboutique.messages drop constraint if exists messages_kind_check;
+alter table cameliaboutique.messages add constraint messages_kind_check check (kind in ('texto','audio','imagen'));
+create index if not exists cb_messages_wamid_idx on cameliaboutique.messages(wa_message_id) where wa_message_id is not null;
 create index if not exists cb_messages_conv_idx on cameliaboutique.messages(conversation_id, created_at);
 
 -- ---------------------------------------------------------------------
@@ -750,10 +756,10 @@ begin
   for m in select * from jsonb_array_elements(coalesce(p_messages, '[]'::jsonb)) loop
     if coalesce(m->>'sender','') not in ('cliente','bot') then continue; end if;
     if length(coalesce(m->>'body','')) = 0 then continue; end if;
-    insert into cameliaboutique.messages (conversation_id, sender, kind, body, options)
+    insert into cameliaboutique.messages (conversation_id, sender, kind, body, options, wa_message_id)
     values (c.id, m->>'sender',
-            case when m->>'kind' = 'audio' then 'audio' else 'texto' end,
-            left(m->>'body', 4000), m->'options');
+            case when m->>'kind' in ('audio','imagen') then m->>'kind' else 'texto' end,
+            left(m->>'body', 4000), m->'options', nullif(m->>'wa_message_id', ''));
     if m->>'sender' = 'cliente' then v_client := v_client + 1; end if;
     v_last := left(m->>'body', 200);
   end loop;
@@ -896,6 +902,75 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
+-- ---------------------------------------------------------------------
+--  FOTOS QUE MANDA EL CLIENTE
+--  El puente manda el archivo aparte, después del mensaje. La web pide permiso
+--  (wa_media_begin), sube la foto al bucket privado con la anon key (la policy
+--  solo deja subir a esa ruta exacta y por 15 minutos) y la anota (wa_media_done).
+-- ---------------------------------------------------------------------
+create table if not exists cameliaboutique.wa_media_uploads (
+  path       text primary key,
+  created_at timestamptz not null default now()
+);
+
+create or replace function cameliaboutique.wa_media_upload_ok(p_name text)
+returns boolean language sql stable security definer
+set search_path = cameliaboutique, pg_temp as $$
+  select exists (select 1 from cameliaboutique.wa_media_uploads
+                  where path = p_name and created_at > now() - interval '15 minutes');
+$$;
+
+create or replace function cameliaboutique.wa_media_begin(p_secret text, p_wa_message_id text, p_ext text)
+returns jsonb language plpgsql security definer
+set search_path = cameliaboutique, pg_temp as $$
+declare
+  m cameliaboutique.messages;
+  c cameliaboutique.conversations;
+  s cameliaboutique.settings;
+  v_path text;
+begin
+  if not cameliaboutique.wa_secret_ok(p_secret) then
+    return jsonb_build_object('ok', false, 'error', 'unauthorized');
+  end if;
+  select * into m from cameliaboutique.messages
+   where wa_message_id = p_wa_message_id and sender = 'cliente'
+   order by created_at desc limit 1;
+  if m.id is null then return jsonb_build_object('ok', true, 'found', false); end if;
+  if m.media_path is not null then return jsonb_build_object('ok', true, 'found', true, 'done', true); end if;
+
+  select * into c from cameliaboutique.conversations where id = m.conversation_id;
+  select * into s from cameliaboutique.settings where id = 1;
+  v_path := c.id::text || '/' || left(regexp_replace(p_wa_message_id, '[^A-Za-z0-9]', '', 'g'), 60)
+            || '.' || coalesce(nullif(regexp_replace(lower(coalesce(p_ext, '')), '[^a-z0-9]', '', 'g'), ''), 'jpg');
+  insert into cameliaboutique.wa_media_uploads (path) values (v_path)
+  on conflict (path) do update set created_at = now();
+  delete from cameliaboutique.wa_media_uploads where created_at < now() - interval '1 day';
+
+  return jsonb_build_object(
+    'ok', true, 'found', true, 'done', false, 'path', v_path,
+    'message_id', m.id, 'message_body', m.body,
+    'id', c.id, 'token', c.token, 'status', c.status, 'state', c.state,
+    'wa_id', c.wa_id, 'visitor_phone', c.visitor_phone,
+    'bot_enabled', s.bot_enabled and s.wa_bot_enabled,
+    -- si después de la foto ya hubo otro mensaje, el bot no contesta tarde
+    'is_last', not exists (select 1 from cameliaboutique.messages x
+                            where x.conversation_id = c.id and x.created_at > m.created_at)
+  );
+end $$;
+
+create or replace function cameliaboutique.wa_media_done(p_secret text, p_message uuid, p_path text)
+returns jsonb language plpgsql security definer
+set search_path = cameliaboutique, pg_temp as $$
+begin
+  if not cameliaboutique.wa_secret_ok(p_secret) then
+    return jsonb_build_object('ok', false, 'error', 'unauthorized');
+  end if;
+  update cameliaboutique.messages set media_path = p_path, kind = 'imagen'
+   where id = p_message and sender = 'cliente';
+  delete from cameliaboutique.wa_media_uploads where path = p_path;
+  return jsonb_build_object('ok', true);
+end $$;
+
 -- Datos para avisar de un pedido nuevo al responsable
 create or replace function cameliaboutique.wa_order_alert(p_secret text, p_order uuid)
 returns jsonb language plpgsql stable security definer
@@ -989,7 +1064,10 @@ grant execute on function cameliaboutique.chat_append(uuid, uuid, jsonb, jsonb, 
 grant execute on function cameliaboutique.chat_poll(uuid, uuid, timestamptz) to anon, authenticated, service_role;
 
 -- WhatsApp: el secreto y los ids vistos no se exponen a nadie por la API
-revoke all on cameliaboutique.wa_config, cameliaboutique.wa_seen from anon, authenticated;
+revoke all on cameliaboutique.wa_config, cameliaboutique.wa_seen, cameliaboutique.wa_media_uploads from anon, authenticated;
+grant execute on function cameliaboutique.wa_media_upload_ok(text)                  to anon, authenticated, service_role;
+grant execute on function cameliaboutique.wa_media_begin(text, text, text)          to anon, authenticated, service_role;
+grant execute on function cameliaboutique.wa_media_done(text, uuid, text)           to anon, authenticated, service_role;
 grant execute on function cameliaboutique.wa_inbound(text, text, text, text, text)  to anon, authenticated, service_role;
 grant execute on function cameliaboutique.wa_agent_message(text, uuid, text)        to anon, authenticated, service_role;
 grant execute on function cameliaboutique.wa_order_alert(text, uuid)                to anon, authenticated, service_role;
@@ -1021,6 +1099,31 @@ create policy "cameliaboutique_update" on storage.objects
   for update to authenticated using (bucket_id = 'cameliaboutique' and cameliaboutique.is_admin());
 create policy "cameliaboutique_delete" on storage.objects
   for delete to authenticated using (bucket_id = 'cameliaboutique' and cameliaboutique.is_admin());
+
+-- Bucket privado "cameliaboutique-chat": fotos que mandan los clientes por WhatsApp.
+-- Solo el admin las ve (con enlaces firmados). La web sube cada foto con permiso de una sola ruta.
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('cameliaboutique-chat', 'cameliaboutique-chat', false, 10485760,
+        array['image/jpeg','image/png','image/webp','image/gif'])
+on conflict (id) do update set public = false,
+  file_size_limit = excluded.file_size_limit,
+  allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "cameliaboutique_chat_read"   on storage.objects;
+drop policy if exists "cameliaboutique_chat_insert" on storage.objects;
+drop policy if exists "cameliaboutique_chat_delete" on storage.objects;
+drop policy if exists "cameliaboutique_chat_upload_read" on storage.objects;
+
+create policy "cameliaboutique_chat_read" on storage.objects
+  for select to authenticated using (bucket_id = 'cameliaboutique-chat' and cameliaboutique.is_admin());
+-- al subir, Storage relee la fila recién creada: solo esa ruta y mientras dure el permiso
+create policy "cameliaboutique_chat_upload_read" on storage.objects
+  for select to anon using (bucket_id = 'cameliaboutique-chat' and cameliaboutique.wa_media_upload_ok(name));
+create policy "cameliaboutique_chat_insert" on storage.objects
+  for insert to anon, authenticated
+  with check (bucket_id = 'cameliaboutique-chat' and cameliaboutique.wa_media_upload_ok(name));
+create policy "cameliaboutique_chat_delete" on storage.objects
+  for delete to authenticated using (bucket_id = 'cameliaboutique-chat' and cameliaboutique.is_admin());
 
 -- ---------------------------------------------------------------------
 --  DATOS INICIALES

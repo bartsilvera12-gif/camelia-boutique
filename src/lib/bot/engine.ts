@@ -64,7 +64,9 @@ export type OrderResult =
 export type BotInput = {
   text: string;
   value?: string;             // valor del botón tocado (si vino de un botón)
-  kind?: "texto" | "audio";
+  kind?: "texto" | "audio" | "imagen";
+  /** productos reconocidos en la foto (ids): seguros y "puede ser" */
+  image?: { sure: string[]; maybe: string[] };
   state: BotState;
   settings: StoreSettings;
   intents: BotIntent[];
@@ -276,6 +278,47 @@ export async function runBot(input: BotInput): Promise<BotResult> {
 
   if (input.kind === "audio") {
     return say({ body: settings.audio_message, options: menuOptions(intents) }, st, { audio: true });
+  }
+
+  // ----- foto o captura de pantalla -----
+  if (input.kind === "imagen") {
+    const pick = (ids: string[]) => ids.map((id) => products.find((p) => p.id === id)).filter((p): p is Product => !!p);
+    const sure = pick(input.image?.sure || []);
+    const maybe = pick(input.image?.maybe || []);
+    // si estaba a mitad de un pedido, la foto empieza uno nuevo
+    const base = { ...clearOrder(st), misses: 0 };
+    if (sure.length === 1) {
+      const p = sure[0];
+      if (p.stock > 0) {
+        return say({
+          body: `¡Lo encontré! 📸\n${productLine(p)}.\n¿Querés que te lo reserve?`,
+          options: [
+            { label: "Sí, lo quiero", value: `order:${p.id}` },
+            { label: "No es ese", value: "menu:productos" },
+          ],
+        }, base);
+      }
+      return say(showProduct(p, products, "Lo encontré 📸 "), base);
+    }
+    if (sure.length > 1) {
+      return say({
+        body: "En tu captura veo estos productos 📸\n" + sure.map(productLine).join("\n") + "\n\n¿Cuál querés?",
+        options: productOptions(sure, "order"),
+      }, { ...base, step: "order_product" });
+    }
+    if (maybe.length) {
+      return say({
+        body: "No estoy del todo seguro 🤔 ¿Es alguno de estos?\n" + maybe.map(productLine).join("\n"),
+        options: [...productOptions(maybe, "product"), { label: "No, es otro", value: "menu:productos" }],
+      }, base);
+    }
+    return say({
+      body: "Recibí tu foto 📸 pero no logro reconocer el producto. ¿Me escribís el nombre o lo que estás buscando? Si querés, también te atiende una persona.",
+      options: [
+        { label: "Ver productos", value: "menu:productos" },
+        { label: "Hablar con una persona", value: "human:1" },
+      ],
+    }, base);
   }
 
   const n = normalize(text);

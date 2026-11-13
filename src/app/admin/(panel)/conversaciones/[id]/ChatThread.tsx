@@ -1,7 +1,7 @@
 "use client";
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bot, Mic, SendHorizontal, UserRound } from "lucide-react";
+import { Bot, Image as ImageIcon, Mic, SendHorizontal, UserRound } from "lucide-react";
 import { browserClient } from "@/lib/supabase/browser";
 import type { ChatMessage, ConversationStatus } from "@/lib/types";
 import { replyConversation } from "../actions";
@@ -27,6 +27,43 @@ function Rich({ text }: { text: string }) {
         </span>
       ))}
     </>
+  );
+}
+
+/** Foto que mandó el cliente: el bucket es privado, se pide un enlace firmado por 1 hora. */
+const signed = new Map<string, Promise<string | null>>();
+function ChatImage({ path }: { path: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    let p = signed.get(path);
+    if (!p) {
+      p = browserClient()
+        .storage.from("cameliaboutique-chat")
+        .createSignedUrl(path, 3600)
+        .then(({ data }) => data?.signedUrl ?? null);
+      signed.set(path, p);
+    }
+    p.then((u) => {
+      if (!alive) return;
+      if (u) setUrl(u);
+      else {
+        signed.delete(path);
+        setFailed(true);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [path]);
+  if (failed) return <div className="flex items-center gap-1.5 text-xs opacity-70 mb-1"><ImageIcon size={13} /> No se pudo cargar la foto</div>;
+  if (!url) return <div className="w-56 h-64 max-w-full rounded-xl bg-champagne/60 animate-pulse mb-1" />;
+  return (
+    <a href={url} target="_blank" rel="noreferrer" className="block -mx-1.5 -mt-0.5 mb-1">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={url} alt="Foto enviada por el cliente" className="rounded-xl max-h-80 w-auto max-w-full object-contain bg-champagne/30" />
+    </a>
   );
 }
 
@@ -60,6 +97,15 @@ export default function ChatThread({
       let q = sb.from("messages").select("*").eq("conversation_id", conversationId).order("created_at");
       if (last) q = q.gt("created_at", last);
       const { data } = await q;
+      // fotos que todavía se estaban recibiendo
+      const pending = messages.filter((x) => x.kind === "imagen" && !x.media_path).map((x) => x.id);
+      if (pending.length) {
+        const { data: got } = await sb.from("messages").select("id, media_path").in("id", pending).not("media_path", "is", null);
+        if (got?.length) {
+          const byId = new Map(got.map((g: any) => [g.id, g.media_path as string]));
+          setMessages((m) => m.map((x) => (byId.has(x.id) ? { ...x, media_path: byId.get(x.id) } : x)));
+        }
+      }
       if (data?.length) {
         setMessages((m) => {
           const seen = new Set(m.map((x) => x.id));
@@ -135,7 +181,13 @@ export default function ChatThread({
                   {m.kind === "audio" && (
                     <div className="flex items-center gap-1.5 text-xs opacity-80 mb-0.5"><Mic size={12} /> Audio (escuchalo en el celular)</div>
                   )}
-                  <div className="break-words"><Rich text={m.body} /></div>
+                  {m.media_path && <ChatImage path={m.media_path} />}
+                  {m.kind === "imagen" && !m.media_path && (
+                    <div className="flex items-center gap-1.5 text-xs opacity-70 mb-0.5"><ImageIcon size={12} /> Foto (recibiéndose…)</div>
+                  )}
+                  {!(m.kind === "imagen" && /^📷 Foto$/.test(m.body)) && (
+                    <div className="break-words"><Rich text={m.kind === "imagen" ? m.body.replace(/^📷\s*/, "") : m.body} /></div>
+                  )}
                   {m.options && m.options.length > 0 && m.sender === "bot" && channel !== "whatsapp" && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {m.options.map((o) => (

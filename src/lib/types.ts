@@ -123,9 +123,10 @@ export type Conversation = {
 export type ChatMessage = {
   id: string;
   sender: "cliente" | "bot" | "agente";
-  kind: "texto" | "audio";
+  kind: "texto" | "audio" | "imagen";
   body: string;
   options?: ChatOption[] | null;
+  media_path?: string | null; // foto del cliente en el bucket privado cameliaboutique-chat
   created_at: string;
 };
 

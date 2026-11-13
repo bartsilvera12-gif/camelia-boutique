@@ -1,5 +1,5 @@
-// El puente también avisa estados de entrega (/status), equivalencias de teléfonos
-// (/inbound/telefonos) y archivos (/inbound/media). Camélia no los usa: se aceptan
+// El puente también avisa estados de entrega (/status) y equivalencias de teléfonos
+// (/inbound/telefonos). Camélia no los usa: se aceptan (las fotos van a /inbound/media)
 // con 200 para que el puente no reintente.
 import { NextResponse } from "next/server";
 import { BRIDGE_SECRET } from "@/lib/wa";

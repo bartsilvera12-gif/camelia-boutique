@@ -3,9 +3,8 @@
 // está mal (401) o el pedido es inválido (400); el resto se contesta 200 aunque falle algo.
 import { NextResponse } from "next/server";
 import { publicClient } from "@/lib/supabase/public";
-import { runBot, type BotState } from "@/lib/bot/engine";
-import { botOrderCreator, draftLoader, loadBotData } from "@/lib/bot/server";
-import { isOrderAlert, BRIDGE_SECRET, formatForWhatsApp, notifyNewOrder, sendWhatsApp } from "@/lib/wa";
+import { replyOnWhatsApp } from "@/lib/bot/wa-reply";
+import { isOrderAlert, BRIDGE_SECRET, sendWhatsApp } from "@/lib/wa";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -21,8 +20,6 @@ type Inbound = {
   fromMe?: boolean;
   pushName?: string | null;
 };
-
-type WaState = BotState & { waOptions?: { label: string; value: string }[]; waLetters?: boolean };
 
 const ok = (extra: object = {}) => NextResponse.json({ ok: true, ...extra });
 
@@ -79,10 +76,19 @@ export async function POST(req: Request) {
 
   const kind = m.messageKind || "";
   const isAudio = /audioMessage/.test(kind);
-  const otherMedia = !isAudio && m.hasMedia;
-  const clientBody = text || (isAudio ? "🎤 Audio" : otherMedia ? `[${kind.replace("Message", "") || "archivo"}]` : "");
+  // foto: el archivo llega después por /inbound/media y ahí se contesta
+  const isImage = /imageMessage/.test(kind) && !!m.hasMedia;
+  const otherMedia = !isAudio && !isImage && m.hasMedia;
+  const clientBody = isImage
+    ? (text ? `📷 ${text}` : "📷 Foto")
+    : text || (isAudio ? "🎤 Audio" : otherMedia ? `[${kind.replace("Message", "") || "archivo"}]` : "");
   if (!clientBody) return ok({ ignored: "vacío" });
-  const clientMsg = { sender: "cliente", body: clientBody, kind: isAudio ? "audio" : "texto" };
+  const clientMsg = {
+    sender: "cliente",
+    body: clientBody,
+    kind: isAudio ? "audio" : isImage ? "imagen" : "texto",
+    wa_message_id: m.waMessageId || null,
+  };
 
   // ---- atiende el equipo o el bot de WhatsApp está apagado: solo se registra ----
   if (c.status === "humano" || !c.bot_enabled) {
@@ -94,8 +100,14 @@ export async function POST(req: Request) {
     return ok({ bot: false });
   }
 
-  // ---- archivo sin texto (foto, documento…): lo ve una persona ----
-  if (otherMedia && !text) {
+  // ---- foto: se guarda y se espera el archivo para reconocer el producto ----
+  if (isImage && m.waMessageId) {
+    await sb.rpc("chat_append", { p_id: c.id, p_token: c.token, p_messages: [clientMsg] });
+    return ok({ waitingMedia: true });
+  }
+
+  // ---- otro archivo sin texto (documento, video…): lo ve una persona ----
+  if ((otherMedia || isImage) && !text) {
     const reply = "¡Gracias! Una persona del equipo va a revisar lo que enviaste y te responde por acá.";
     await sb.rpc("chat_append", {
       p_id: c.id, p_token: c.token,
@@ -107,60 +119,11 @@ export async function POST(req: Request) {
   }
 
   // ---- bot ----
-  const { settings, intents, products, slots, shipping } = await loadBotData(sb);
-  const state = (c.state || {}) as WaState;
-
-  // "2" → la opción 2 de la última lista que mandó el bot; si la lista era con letras,
-  // "B" → la opción B (y un número se toma como lo que es, por ejemplo una cantidad)
-  let value: string | undefined;
-  if (state.waOptions?.length) {
-    const idx = state.waLetters
-      ? (/^\s*([a-z])\s*[.)]?\s*$/i.exec(text)?.[1]?.toUpperCase().charCodeAt(0) ?? 0) - 65
-      : Number(/^\s*(\d{1,2})\s*\.?\s*$/.exec(text)?.[1] ?? 0) - 1;
-    const opt = idx >= 0 ? state.waOptions[idx] : undefined;
-    if (opt) value = opt.value;
-  }
-
-  const result = await runBot({
+  const r = await replyOnWhatsApp(sb, c, m.fromDigits, {
     text,
-    value,
     kind: isAudio ? "audio" : "texto",
-    state,
-    settings,
-    intents,
-    products,
-    slots,
-    shipping,
-    loadDraft: draftLoader(sb),
-    visitorName: null, // el nombre de perfil de WhatsApp no siempre es el real: se pregunta
-    visitorPhone: c.visitor_phone || m.fromPhone || null,
-    createOrder: botOrderCreator(sb, c, "whatsapp", notifyNewOrder),
+    clientMsg,
+    fallbackPhone: m.fromPhone || null,
   });
-
-  const lastWithOptions = [...result.messages].reverse().find((x) => x.options?.length);
-  const newState: WaState = {
-    ...result.state,
-    waOptions: lastWithOptions?.options || [],
-    waLetters: !!lastWithOptions?.letters,
-  };
-  const outgoing = result.messages.map((x) => formatForWhatsApp(x.body, x.options, x.letters));
-
-  // primero se guarda (así el eco de nuestros envíos se reconoce) y después se envía
-  await sb.rpc("chat_append", {
-    p_id: c.id,
-    p_token: c.token,
-    p_messages: [clientMsg, ...result.messages.map((x, i) => ({ sender: "bot", body: outgoing[i], options: x.options ?? null }))],
-    p_state: newState,
-    p_needs_human: result.handoff || result.audio ? true : null,
-    p_status: result.handoff ? "humano" : null,
-    p_visitor_name: result.visitorName ?? null,
-    p_visitor_phone: result.visitorPhone ?? null,
-    p_has_audio: result.audio ?? null,
-  });
-
-  for (const body of outgoing) {
-    const r = await sendWhatsApp(m.fromDigits, body);
-    if (!r.ok) return ok({ sendError: r.error });
-  }
-  return ok();
+  return ok(r.ok ? {} : { sendError: r.error });
 }
