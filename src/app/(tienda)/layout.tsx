@@ -1,6 +1,5 @@
 import Header from "@/components/Header";
 import Footer from "@/components/Footer";
-import ChatWidget from "@/components/ChatWidget";
 import KeycapButton from "@/components/KeycapButton";
 import Toast from "@/components/Toast";
 import { StoreProvider } from "@/components/StoreContext";
@@ -15,7 +14,6 @@ export default async function TiendaLayout({ children }: { children: React.React
       <Footer whatsapp={settings?.whatsapp_number} />
       <KeycapButton />
       <Toast />
-      <ChatWidget />
     </StoreProvider>
   );
 }
