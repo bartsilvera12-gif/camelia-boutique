@@ -4,7 +4,9 @@ import { useRouter } from "next/navigation";
 import Ornament from "@/components/Ornament";
 import { useCart } from "@/lib/cart-store";
 import { formatGs } from "@/lib/format";
-import { createOrder } from "./actions";
+import { applyCoupon, type Coupon } from "@/lib/coupons";
+import { slotLabel } from "@/lib/bot/engine";
+import { checkCoupon, createOrder, getCheckoutOptions, type CheckoutOptions } from "./actions";
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -13,9 +15,45 @@ export default function CheckoutPage() {
   const [mounted, setMounted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => setMounted(true), []);
+  const [couponInput, setCouponInput] = useState("");
+  const [coupon, setCoupon] = useState<Coupon | null>(null);
+  const [couponMsg, setCouponMsg] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [opts, setOpts] = useState<CheckoutOptions | null>(null);
+  const [delivery, setDelivery] = useState("delivery");
+
+  const loadOpts = () =>
+    getCheckoutOptions().then(setOpts).catch(() => setOpts({ slots: [], payments: [], pickup: true }));
+
+  useEffect(() => {
+    setMounted(true);
+    loadOpts();
+  }, []);
   const subtotal = items.reduce((a, i) => a + i.price * i.qty, 0);
+  const { discount, total } = applyCoupon(subtotal, coupon);
+
   if (!mounted) return null;
+
+  async function handleApplyCoupon() {
+    if (!couponInput.trim()) return;
+    setChecking(true);
+    const c = await checkCoupon(couponInput).catch(() => null);
+    setChecking(false);
+    if (!c) {
+      setCoupon(null);
+      setCouponMsg("Ese cupón no es válido.");
+      setTimeout(() => setCouponMsg(null), 2500);
+      return;
+    }
+    setCoupon(c);
+    setCouponMsg(`✓ ${c.label || `${c.percent}% de descuento`}`);
+  }
+
+  function handleRemoveCoupon() {
+    setCoupon(null);
+    setCouponInput("");
+    setCouponMsg(null);
+  }
 
   async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -23,6 +61,8 @@ export default function CheckoutPage() {
     setLoading(true);
     setError(null);
     const fd = new FormData(e.currentTarget);
+    const slot = String(fd.get("slot") || "");
+    const chosen = opts?.slots.find((s) => `${s.date}|${s.slot_id}` === slot);
     const res = await createOrder({
       name: String(fd.get("name") || ""),
       phone: String(fd.get("phone") || ""),
@@ -30,29 +70,35 @@ export default function CheckoutPage() {
       address: String(fd.get("address") || ""),
       city: String(fd.get("city") || ""),
       delivery: String(fd.get("delivery") || "delivery"),
-      payment: String(fd.get("payment") || "transferencia"),
+      payment: String(fd.get("payment") || "Transferencia"),
       notes: String(fd.get("notes") || ""),
+      slot,
+      couponCode: coupon?.code,
       items,
     });
     setLoading(false);
     if (!res.ok) {
       setError(res.error);
+      loadOpts();
       return;
     }
-    // Persistimos snapshot para la pantalla de confirmación.
     sessionStorage.setItem(
       "camelia-last-order",
       JSON.stringify({
         id: res.orderId,
         items,
         total: res.total,
+        discount: res.discount,
+        couponCode: coupon?.code,
         name: String(fd.get("name") || ""),
         phone: String(fd.get("phone") || ""),
         address: String(fd.get("address") || ""),
         city: String(fd.get("city") || ""),
         delivery: String(fd.get("delivery") || "delivery"),
-        payment: String(fd.get("payment") || "transferencia"),
+        payment: String(fd.get("payment") || "Transferencia"),
         notes: String(fd.get("notes") || ""),
+        deliveryDate: chosen?.date,
+        deliveryTime: chosen ? `${chosen.start} a ${chosen.end}` : undefined,
       })
     );
     clear();
@@ -74,25 +120,42 @@ export default function CheckoutPage() {
             <div><label className="label">Teléfono</label><input name="phone" required className="input" placeholder="+595 ..." /></div>
             <div><label className="label">Email</label><input name="email" type="email" className="input" /></div>
             <div><label className="label">Ciudad</label><input name="city" className="input" /></div>
-            <div className="md:col-span-2"><label className="label">Dirección</label><input name="address" className="input" /></div>
             <div>
               <label className="label">Método de entrega</label>
-              <select name="delivery" className="input" defaultValue="delivery">
+              <select name="delivery" className="input" value={delivery} onChange={(e) => setDelivery(e.target.value)}>
                 <option value="delivery">Delivery a domicilio</option>
-                <option value="pickup">Retiro en tienda</option>
+                {opts?.pickup !== false && <option value="pickup">Retiro en tienda</option>}
               </select>
             </div>
             <div>
               <label className="label">Método de pago</label>
-              <select name="payment" className="input" defaultValue="transferencia">
-                <option value="transferencia">Transferencia</option>
-                <option value="tarjeta">Tarjeta</option>
-                <option value="efectivo">Efectivo</option>
+              <select name="payment" className="input">
+                {(opts?.payments?.length ? opts.payments : ["Transferencia"]).map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
               </select>
+            </div>
+            {delivery === "delivery" && (
+              <div className="md:col-span-2"><label className="label">Dirección</label><input name="address" required className="input" /></div>
+            )}
+            <div className="md:col-span-2">
+              <label className="label">Día y horario de {delivery === "pickup" ? "retiro" : "entrega"}</label>
+              {opts === null ? (
+                <div className="input text-thyme">Cargando horarios…</div>
+              ) : opts.slots.length ? (
+                <select name="slot" required className="input" defaultValue="">
+                  <option value="" disabled>Elegí un horario</option>
+                  {opts.slots.map((s) => (
+                    <option key={s.date + s.slot_id} value={`${s.date}|${s.slot_id}`}>{slotLabel(s)}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="input text-thyme">No hay horarios libres por ahora: coordinamos la entrega por WhatsApp.</div>
+              )}
             </div>
             <div className="md:col-span-2">
               <label className="label">Observación</label>
-              <textarea name="notes" rows={3} className="input" placeholder="Talle, color de preferencia, referencias del domicilio..." />
+              <textarea name="notes" rows={3} className="input" placeholder="Color de preferencia, referencias del domicilio..." />
             </div>
           </div>
           {error && <div className="text-sm text-rose">Error: {error}</div>}
@@ -106,7 +169,7 @@ export default function CheckoutPage() {
 
         <aside className="bg-champagne/70 rounded-2xl p-6 h-fit">
           <div className="eyebrow mb-3">Resumen</div>
-          <div className="space-y-2 text-sm max-h-64 overflow-auto pr-1">
+          <div className="space-y-2 text-sm max-h-56 overflow-auto pr-1">
             {items.map((i) => (
               <div key={i.productId} className="flex justify-between">
                 <span>{i.qty} × {i.name}</span>
@@ -115,8 +178,69 @@ export default function CheckoutPage() {
             ))}
             {items.length === 0 && <div className="text-thyme text-xs">Tu carrito está vacío.</div>}
           </div>
-          <div className="border-t border-bisque mt-3 pt-3 flex justify-between font-serif text-xl">
-            <span>Total</span><span className="text-rose">{formatGs(subtotal)}</span>
+
+          {/* Cupón */}
+          <div className="mt-5 pt-4 border-t border-bisque">
+            <div className="eyebrow mb-2">Cupón</div>
+            {coupon ? (
+              <div className="flex items-center justify-between gap-2 bg-cream border border-thyme/50 rounded-lg px-3 py-2">
+                <div className="text-sm">
+                  <div className="text-thyme font-medium">{coupon.code}</div>
+                  <div className="text-[11px] text-muted">-{coupon.percent}% aplicado</div>
+                </div>
+                <button type="button" onClick={handleRemoveCoupon} className="text-xs text-rose hover:underline">
+                  Quitar
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex gap-2">
+                  <input
+                    value={couponInput}
+                    onChange={(e) => setCouponInput(e.target.value)}
+                    placeholder="CAMELIA10"
+                    className="input flex-1 uppercase tracking-widest text-xs"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        handleApplyCoupon();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleApplyCoupon}
+                    disabled={checking}
+                    className="btn-outline !py-2 !px-3 !text-[11px] disabled:opacity-50"
+                  >
+                    {checking ? "…" : "Aplicar"}
+                  </button>
+                </div>
+                {couponMsg && (
+                  <div className={`text-[11px] mt-1.5 ${couponMsg.startsWith("✓") ? "text-thyme" : "text-rose"}`}>
+                    {couponMsg}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+
+          {/* Totales */}
+          <div className="mt-4 space-y-1 text-sm border-t border-bisque pt-3">
+            <div className="flex justify-between text-muted">
+              <span>Subtotal</span>
+              <span>{formatGs(subtotal)}</span>
+            </div>
+            {discount > 0 && (
+              <div className="flex justify-between text-thyme">
+                <span>Descuento ({coupon?.code})</span>
+                <span>-{formatGs(discount)}</span>
+              </div>
+            )}
+            <div className="flex justify-between font-serif text-xl pt-2">
+              <span>Total</span>
+              <span className="text-rose">{formatGs(total)}</span>
+            </div>
           </div>
         </aside>
       </div>

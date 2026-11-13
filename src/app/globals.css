@@ -9,7 +9,7 @@
 }
 
 html, body { background: #FFFDFA; color: #3a2f2a; }
-body { font-family: 'Inter', system-ui, sans-serif; }
+body { font-family: 'Inter', system-ui, sans-serif; overflow-x: hidden; }
 
 .font-serif { font-family: 'Cormorant Garamond', Georgia, serif; }
 
@@ -29,3 +29,119 @@ body { font-family: 'Inter', system-ui, sans-serif; }
   @apply w-full rounded-lg border border-bisque bg-cream px-3 py-2.5 text-sm outline-none focus:border-thyme;
 }
 .label { @apply block text-[11px] uppercase tracking-widest text-thyme mb-1.5; }
+
+/* Checkboxes y radios en rose de la paleta (nativo, respeta accesibilidad) */
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: #C87D87;
+  cursor: pointer;
+}
+
+/* Tablas de admin — buena legibilidad */
+.admin-table { @apply w-full text-sm text-ink; }
+.admin-table thead th {
+  @apply text-left px-4 py-3 font-semibold text-[11px] uppercase tracking-widest text-thyme bg-champagne/70 border-b border-champagne;
+}
+.admin-table tbody tr {
+  @apply border-b border-champagne/60 transition-colors;
+}
+.admin-table tbody tr:nth-child(even) { @apply bg-champagne/10; }
+.admin-table tbody tr:hover { @apply bg-champagne/40; }
+.admin-table td { @apply px-4 py-3 text-ink; }
+.admin-table td.muted { @apply text-thyme text-xs; }
+.admin-table .card-wrap { @apply bg-cream border border-champagne rounded-xl overflow-hidden shadow-sm; }
+
+/* Florcitas que entran desde la derecha off-screen y cruzan la barra */
+@keyframes fly-left-cw {
+  0%   { transform: translateX(80px)  translateY(0)   rotate(0deg); }
+  50%  { transform: translateX(-50vw) translateY(-3px) rotate(180deg); }
+  100% { transform: translateX(calc(-100vw - 40px)) translateY(0) rotate(360deg); }
+}
+@keyframes fly-left-ccw {
+  0%   { transform: translateX(80px)  translateY(0)   rotate(0deg); }
+  50%  { transform: translateX(-50vw) translateY(3px)  rotate(-180deg); }
+  100% { transform: translateX(calc(-100vw - 40px)) translateY(0) rotate(-360deg); }
+}
+.flying-flower-cw,
+.flying-flower-ccw {
+  position: absolute;
+  right: 0;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  animation-fill-mode: backwards;
+  will-change: transform;
+}
+.flying-flower-cw  { animation-name: fly-left-cw;  }
+.flying-flower-ccw { animation-name: fly-left-ccw; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flying-flower-cw, .flying-flower-ccw { animation: none; opacity: 0; }
+}
+
+/* Marquee — scroll horizontal infinito para banners/texto de fondo */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+.marquee-track { animation: marquee 45s linear infinite; }
+.marquee-track-fast { animation: marquee 22s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .marquee-track, .marquee-track-fast { animation: none; }
+}
+
+/* Ken Burns — zoom + pan sutil continuo para fotos */
+@keyframes kenBurns {
+  0%   { transform: scale(1) translate(0, 0); }
+  50%  { transform: scale(1.08) translate(-2%, -3%); }
+  100% { transform: scale(1) translate(0, 0); }
+}
+.ken-burns { animation: kenBurns 20s ease-in-out infinite; transform-origin: center; }
+@media (prefers-reduced-motion: reduce) {
+  .ken-burns { animation: none; }
+}
+
+/* Dual range slider — dos <input type="range"> superpuestos */
+.range-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  pointer-events: none;
+  -webkit-appearance: none;
+  appearance: none;
+  transform: translateY(-50%);
+}
+.range-thumb::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #C87D87;
+  border: 3px solid #FFFDFA;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  cursor: pointer;
+}
+.range-thumb::-moz-range-thumb {
+  pointer-events: auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #C87D87;
+  border: 3px solid #FFFDFA;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+  cursor: pointer;
+}
+.range-thumb::-webkit-slider-runnable-track { background: transparent; }
+.range-thumb::-moz-range-track { background: transparent; }
+
+.badge { @apply inline-block text-[10px] uppercase tracking-widest rounded-full px-2.5 py-1 font-medium; }
+.badge-active   { @apply bg-thyme/15 text-thyme; }
+.badge-inactive { @apply bg-ink/10 text-ink/80; }
+.badge-featured { @apply bg-rose/15 text-rose; }
+.badge-critical { @apply bg-rose/15 text-rose; }

@@ -8,10 +8,12 @@ const LINKS = [
   { href: "/admin", label: "Dashboard" },
   { href: "/admin/pedidos", label: "Pedidos", badge: "orders" },
   { href: "/admin/agenda", label: "Agenda" },
+  { href: "/admin/entregas", label: "Entregas y pagos" },
   { href: "/admin/conversaciones", label: "Conversaciones", badge: "chats" },
   { href: "/admin/contactos", label: "Contactos" },
   { href: "/admin/productos", label: "Productos" },
   { href: "/admin/categorias", label: "Categorías" },
+  { href: "/admin/cupones", label: "Cupones" },
   { href: "/admin/bot", label: "Bot" },
   { href: "/admin/configuracion", label: "Configuración" },
 ] as const;

@@ -54,7 +54,9 @@ export default async function AgendaPage({ searchParams }: { searchParams: { des
 
       <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-4">
         {days.map((d) => {
-          const list = orders.filter((o) => o.delivery_date === d);
+          const list = orders
+            .filter((o) => o.delivery_date === d)
+            .sort((a, b) => (a.delivery_time || "99").localeCompare(b.delivery_time || "99"));
           const date = new Date(d + "T12:00:00Z");
           return (
             <div key={d} className={"rounded-xl border p-3 " + (d === today ? "border-thyme bg-thyme/5" : "border-champagne bg-cream")}>
@@ -104,6 +106,10 @@ function AgendaItem({ o }: { o: Order }) {
           <div className="text-[11px] text-thyme truncate">
             {(o.order_items || []).map((i) => `${i.qty}× ${i.name}`).join(", ")}
           </div>
+          <div className="text-[11px] text-ink">
+            {o.delivery_time ? `${o.delivery_time} · ` : ""}{o.delivery === "pickup" ? "Retira en el local" : "Envío"} · {o.payment}
+          </div>
+          {o.delivery !== "pickup" && o.address && <div className="text-[11px] text-thyme truncate">{o.address}</div>}
           <div className="text-[11px] text-rose">{formatGs(o.total)} · {o.phone}</div>
         </div>
         <StatusSelect id={o.id} status={o.status} />

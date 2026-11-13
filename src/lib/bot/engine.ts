@@ -1,18 +1,27 @@
 // Motor del bot por reglas: menús, palabras clave y pasos definidos.
 // No inventa nada: responde con lo que el negocio cargó en el panel.
 
-import { formatGs } from "../format";
-import type { BotIntent, ChatOption, Product, StoreSettings } from "../types";
+import { finalPrice, formatGs } from "../format";
+import type { BotIntent, ChatOption, DeliverySlot, Product, StoreSettings } from "../types";
 import {
-  STOPWORDS, formatDateEs, isNo, isYes, isoDate, normalize, parseDate, parsePhone,
-  parseQty, todayPY, tokens, wordSimilarity,
+  STOPWORDS, isNo, isYes, normalize, parseDate, parsePhone, parseQty, tokens, wordSimilarity,
 } from "./text";
 
+type Step =
+  | "order_product" | "order_size" | "order_qty" | "order_mode" | "order_slot" | "order_address"
+  | "order_name" | "order_phone" | "order_payment" | "order_confirm";
+
 export type BotState = {
-  step?: "order_product" | "order_qty" | "order_date" | "order_name" | "order_phone" | "order_confirm";
+  step?: Step;
   productId?: string;
+  size?: string;
   qty?: number;
+  mode?: "envio" | "retiro";
   date?: string;
+  slotId?: string;
+  slotLabel?: string;
+  address?: string;
+  payment?: string;
   name?: string;
   phone?: string;
   misses?: number;
@@ -23,15 +32,20 @@ export type BotOut = { body: string; options?: ChatOption[] };
 
 export type OrderRequest = {
   productId: string;
+  size?: string;
   qty: number;
   date: string;
+  slotId: string;
+  mode: "envio" | "retiro";
+  address?: string;
+  payment: string;
   name: string;
   phone: string;
 };
 
 export type OrderResult =
   | { ok: true; orderId: string; total: number; status: string }
-  | { ok: false; shortage?: { available: number }; error?: string };
+  | { ok: false; shortage?: { available: number }; slotTaken?: boolean; error?: string };
 
 export type BotInput = {
   text: string;
@@ -41,6 +55,7 @@ export type BotInput = {
   settings: StoreSettings;
   intents: BotIntent[];
   products: Product[];
+  slots: DeliverySlot[];      // turnos con lugar libre, en orden
   visitorName?: string | null;
   visitorPhone?: string | null;
   createOrder: (o: OrderRequest) => Promise<OrderResult>;
@@ -97,6 +112,25 @@ export function searchProducts(text: string, products: Product[]): Product[] {
   return scored.filter((x) => x.score >= top - 0.2).map((x) => x.p);
 }
 
+/**
+ * Producto que viene del botón "Comprar por WhatsApp" de la web: el mensaje trae
+ * `(ref: slug)` y el nombre entre comillas. Es exacto, no hace falta adivinar.
+ */
+export function productFromLink(text: string, products: Product[]): Product | null {
+  const ref = text.match(/ref:\s*([a-z0-9-]+)/i)?.[1]?.toLowerCase();
+  if (ref) {
+    const p = products.find((x) => x.slug === ref);
+    if (p) return p;
+  }
+  const quoted = text.match(/["“]([^"”]{3,80})["”]/)?.[1];
+  if (quoted) {
+    const q = normalize(quoted);
+    const p = products.find((x) => normalize(x.name) === q);
+    if (p) return p;
+  }
+  return null;
+}
+
 // ---------- intenciones ----------
 
 function matchIntent(text: string, intents: BotIntent[]): BotIntent | null {
@@ -126,19 +160,26 @@ function matchIntent(text: string, intents: BotIntent[]): BotIntent | null {
 
 // ---------- mensajes de producto ----------
 
+function priceText(p: Product): string {
+  return p.discount
+    ? `${formatGs(finalPrice(p))} (antes ${formatGs(p.price)}, -${p.discount}%)`
+    : formatGs(p.price);
+}
+
 function productLine(p: Product): string {
   const stock = p.stock > 0 ? `hay ${p.stock} ${p.stock === 1 ? "unidad" : "unidades"}` : "sin stock por ahora";
-  return `*${p.name}* — ${formatGs(p.price)} (${stock})`;
+  const talles = p.sizes?.length ? ` · talles ${p.sizes.join(", ")}` : "";
+  return `*${p.name}* — ${priceText(p)} (${stock})${talles}`;
 }
 
 function productOptions(list: Product[], prefix: "product" | "order"): ChatOption[] {
   return list.slice(0, 6).map((p) => ({ label: p.name, value: `${prefix}:${p.id}` }));
 }
 
-function showProduct(p: Product, products: Product[]): BotOut {
+function showProduct(p: Product, products: Product[], intro = ""): BotOut {
   if (p.stock > 0) {
     return {
-      body: `${productLine(p)}.${p.description ? `\n${p.description}` : ""}`,
+      body: `${intro}${productLine(p)}.${p.description ? `\n${p.description}` : ""}`,
       options: [
         { label: "Pedir este", value: `order:${p.id}` },
         { label: "Ver otros productos", value: "menu:productos" },
@@ -166,55 +207,29 @@ function catalogOverview(products: Product[], intro?: string): BotOut {
   };
 }
 
-// ---------- flujo de pedido ----------
+// ---------- turnos de entrega ----------
 
-const dateOptions = (): ChatOption[] => {
-  const t = todayPY();
-  const d = (n: number) => { const x = new Date(t); x.setUTCDate(x.getUTCDate() + n); return isoDate(x); };
-  return [
-    { label: "Hoy", value: `date:${d(0)}` },
-    { label: "Mañana", value: `date:${d(1)}` },
-    { label: "Pasado mañana", value: `date:${d(2)}` },
-  ];
-};
+const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
-function askQty(p: Product): BotOut {
-  const opts = [1, 2, 3].filter((n) => n <= p.stock).map((n) => ({ label: String(n), value: `qty:${n}` }));
-  return { body: `${productLine(p)}.\n¿Cuántas unidades querés?`, options: opts };
+export function slotLabel(s: Pick<DeliverySlot, "date" | "start" | "end">): string {
+  const d = new Date(s.date + "T12:00:00Z");
+  return `${DIAS[d.getUTCDay()]} ${d.getUTCDate()}/${d.getUTCMonth() + 1} · ${s.start} a ${s.end}`;
 }
 
-function nextOrderStep(state: BotState, products: Product[]): { state: BotState; out: BotOut } {
-  const p = products.find((x) => x.id === state.productId);
-  if (!p) return { state: { ...state, step: "order_product", productId: undefined }, out: { body: "¿Qué producto querés pedir?" } };
-  if (!state.qty) return { state: { ...state, step: "order_qty" }, out: askQty(p) };
-  if (!state.date) return { state: { ...state, step: "order_date" }, out: { body: "¿Para qué día lo querés? Podés escribir una fecha (ej. 20/11) o un día (ej. viernes).", options: dateOptions() } };
-  if (!state.name) return { state: { ...state, step: "order_name" }, out: { body: "¿A nombre de quién lo anotamos?" } };
-  if (!state.phone) return { state: { ...state, step: "order_phone" }, out: { body: "¿A qué número de teléfono te contactamos?" } };
-  const total = p.price * state.qty;
-  return {
-    state: { ...state, step: "order_confirm" },
-    out: {
-      body:
-        `Entendí esto:\n• ${state.qty} × ${p.name} — ${formatGs(total)}\n• Para el ${formatDateEs(state.date)}\n` +
-        `• A nombre de ${state.name} (${state.phone})\n¿Es correcto?`,
-      options: [
-        { label: "Sí, confirmar", value: "confirm:si" },
-        { label: "Cambiar cantidad", value: "confirm:qty" },
-        { label: "Cancelar", value: "confirm:no" },
-      ],
-    },
-  };
-}
+const slotValue = (s: DeliverySlot) => `slot:${s.date}|${s.slot_id}`;
 
-function startOrder(p: Product, base: BotState, products: Product[]) {
-  if (p.stock <= 0) return { state: { ...base, step: undefined }, out: showProduct(p, products) };
-  return nextOrderStep({ ...base, productId: p.id, qty: undefined, step: "order_qty" }, products);
+function slotOptions(slots: DeliverySlot[]): ChatOption[] {
+  return slots.slice(0, 6).map((s) => ({ label: slotLabel(s), value: slotValue(s) }));
 }
 
 // ---------------------------------------------------------------------
 
 export async function runBot(input: BotInput): Promise<BotResult> {
   const { settings, intents, products } = input;
+  let slots = input.slots;
+  const payments = (settings.payment_methods || []).filter(Boolean);
+  const pickup = settings.pickup_enabled !== false;
+
   const st: BotState = {
     ...input.state,
     name: input.state.name || input.visitorName || undefined,
@@ -229,8 +244,8 @@ export async function runBot(input: BotInput): Promise<BotResult> {
     visitorPhone: state.phone,
     ...extra,
   });
-  const handoff = (state: BotState): BotResult =>
-    say({ body: settings.handoff_message }, { ...state, step: undefined, misses: 0 }, { handoff: true });
+  const handoff = (state: BotState, body = settings.handoff_message): BotResult =>
+    say({ body }, { ...state, step: undefined, misses: 0 }, { handoff: true });
 
   if (input.kind === "audio") {
     return say({ body: settings.audio_message, options: menuOptions(intents) }, st, { audio: true });
@@ -249,13 +264,13 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   if (vk === "product") {
     const p = products.find((x) => x.id === vv);
     if (p) {
-      if (st.step === "order_product") { const r = startOrder(p, st, products); return say(r.out, r.state); }
+      if (st.step === "order_product") return startOrder(p, st);
       return say(showProduct(p, products), { ...st, misses: 0 });
     }
   }
   if (vk === "order") {
     const p = products.find((x) => x.id === vv);
-    if (p) { const r = startOrder(p, { ...st, misses: 0 }, products); return say(r.out, r.state); }
+    if (p) return startOrder(p, { ...st, misses: 0 });
   }
 
   // ----- salir del flujo -----
@@ -264,10 +279,44 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   }
   if (/^(menu|inicio|opciones|0)$/.test(n)) return say(welcome(settings, intents), { ...st, step: undefined });
 
+  // ----- mensajes que arma la web -----
+  // "Comprar por WhatsApp" de un producto: se responde disponibilidad y se ofrece pedirlo
+  const linked = productFromLink(text, products);
+  if (linked && !st.step) {
+    const hola = /^\W*hola/i.test(text) ? "¡Hola! " : "";
+    if (linked.stock > 0) {
+      return say({
+        body: `${hola}Sí, está disponible 🌸\n${productLine(linked)}.\n¿Querés que te lo reserve?`,
+        options: [
+          { label: "Sí, lo quiero", value: `order:${linked.id}` },
+          { label: "Ver otros productos", value: "menu:productos" },
+        ],
+      }, { ...st, misses: 0 });
+    }
+    return say(showProduct(linked, products), { ...st, misses: 0 });
+  }
+  // pedido ya hecho en la web o carrito con varios productos: lo sigue una persona
+  const webOrder = text.match(/pedido\s*#([0-9a-f]{8})/i)?.[1];
+  if (webOrder) {
+    return handoff(st, `¡Gracias! Ya tenemos tu pedido #${webOrder}. Una persona del equipo te confirma por acá la entrega y el pago.`);
+  }
+  if (/quisiera comprar/i.test(text) && (text.match(/•/g) || []).length >= 1) {
+    return handoff(st, "¡Gracias! Recibí tu lista. Una persona del equipo revisa el stock y te responde por acá para coordinar entrega y pago.");
+  }
+
   // ----- pasos del pedido -----
   if (st.step) {
     const r = await handleOrderStep(text, vk, vv, st);
     if (r) return r;
+  }
+
+  // ----- "¿qué días entregan?" → turnos libres de la agenda -----
+  if (/\b(dias?|cuando|turnos?|horarios?|que hora)\b/.test(n) && /(entreg|envi|retir|deliver|llega)/.test(n)) {
+    if (!slots.length) return say({ body: "Ahora no tenemos turnos de entrega libres. Si querés, te paso con una persona para coordinar." , options: menuOptions(intents) }, st);
+    return say({
+      body: `Estos son los próximos días y horarios disponibles:\n${slots.slice(0, 6).map((x) => `• ${slotLabel(x)}`).join("\n")}\n\n¿Querés hacer un pedido?`,
+      options: menuOptions(intents),
+    }, { ...st, misses: 0 });
   }
 
   // ----- número de opción del menú -----
@@ -294,7 +343,81 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   // =================================================================
 
   function clearOrder(s: BotState): BotState {
-    return { ...s, step: undefined, productId: undefined, qty: undefined, date: undefined, misses: 0 };
+    return {
+      ...s, step: undefined, productId: undefined, size: undefined, qty: undefined, mode: undefined, date: undefined,
+      slotId: undefined, slotLabel: undefined, payment: undefined, misses: 0,
+    };
+  }
+
+  function startOrder(p: Product, base: BotState): BotResult {
+    if (p.stock <= 0) return say(showProduct(p, products), { ...base, step: undefined });
+    return next({ ...clearOrder(base), productId: p.id });
+  }
+
+  /** Pregunta lo primero que falte del pedido. */
+  function next(s: BotState): BotResult {
+    const p = products.find((x) => x.id === s.productId);
+    if (!p) return say({ body: "¿Qué producto querés pedir?" }, { ...s, step: "order_product" });
+    if (p.sizes?.length && !s.size) {
+      return say({
+        body: `¿Qué talle de *${p.name}* querés?`,
+        options: p.sizes.map((t) => ({ label: t, value: `size:${t}` })),
+      }, { ...s, step: "order_size" });
+    }
+    if (!s.qty) {
+      const opts = [1, 2, 3].filter((q) => q <= p.stock).map((q) => ({ label: String(q), value: `qty:${q}` }));
+      return say({ body: `${productLine(p)}.\n¿Cuántas unidades querés?`, options: opts }, { ...s, step: "order_qty" });
+    }
+    if (!s.mode) {
+      if (!pickup) return next({ ...s, mode: "envio" });
+      return say({
+        body: "¿Cómo lo querés recibir?",
+        options: [
+          { label: "Envío a domicilio", value: "mode:envio" },
+          { label: "Retiro en el local", value: "mode:retiro" },
+        ],
+      }, { ...s, step: "order_mode" });
+    }
+    if (!s.slotId) {
+      if (!slots.length) {
+        return handoff(s, "Ahora no tenemos turnos de entrega libres en la agenda. Te paso con una persona del equipo para coordinarlo.");
+      }
+      const que = s.mode === "retiro" ? "pasar a retirarlo" : "recibirlo";
+      return say({
+        body: `Estos son los próximos días y horarios disponibles para ${que}. Elegí uno o escribime el día que te queda bien (ej. viernes o 20/11):`,
+        options: slotOptions(slots),
+      }, { ...s, step: "order_slot" });
+    }
+    if (s.mode === "envio" && !s.address) {
+      return say({ body: "¿A qué dirección lo enviamos? (calle, número, barrio y ciudad)" }, { ...s, step: "order_address" });
+    }
+    if (!s.name) return say({ body: "¿A nombre de quién lo anotamos?" }, { ...s, step: "order_name" });
+    if (!s.phone) return say({ body: "¿A qué número de teléfono te contactamos?" }, { ...s, step: "order_phone" });
+    if (!s.payment && payments.length) {
+      return say({
+        body: "¿Cómo vas a pagar?",
+        options: payments.map((m) => ({ label: m, value: `pay:${m}` })),
+      }, { ...s, step: "order_payment" });
+    }
+    const total = finalPrice(p) * s.qty;
+    const entrega = s.mode === "retiro"
+      ? `Retiro en el local${settings.address ? ` (${settings.address})` : ""}`
+      : `Envío a ${s.address}`;
+    return say({
+      body:
+        `Entendí esto:\n• ${s.qty} × ${p.name}${s.size ? ` (talle ${s.size})` : ""} — ${formatGs(total)}\n• ${entrega}\n• ${s.slotLabel}\n` +
+        (s.payment ? `• Pago: ${s.payment}\n` : "") +
+        `• A nombre de ${s.name} (${s.phone})\n¿Es correcto?`,
+      options: [
+        { label: "Sí, confirmar", value: "confirm:si" },
+        { label: "Cambiar horario", value: "confirm:slot" },
+        { label: "Cancelar", value: "confirm:no" },
+      ],
+    }, { ...s, step: "order_confirm" });
+  }
+
+  function chooseSlot(s: BotState, slot: DeliverySlot): BotResult {
+    return next({ ...s, date: slot.date, slotId: slot.slot_id, slotLabel: slotLabel(slot) });
   }
 
   function handleIntent(i: BotIntent, txt: string, s: BotState): BotResult {
@@ -302,15 +425,19 @@ export async function runBot(input: BotInput): Promise<BotResult> {
     switch (i.action) {
       case "humano":
         return handoff(base);
-      case "horarios":
-        return say({ body: `${i.response ? i.response + "\n" : ""}${settings.hours}` }, base);
+      case "horarios": {
+        const turnos = slots.length
+          ? `\n\nPróximos turnos de entrega:\n${slots.slice(0, 5).map((x) => `• ${slotLabel(x)}`).join("\n")}`
+          : "";
+        return say({ body: `${i.response ? i.response + "\n" : ""}${settings.hours}${turnos}` }, base);
+      }
       case "pedido": {
         const found = searchProducts(txt, products);
-        if (found.length === 1) { const r = startOrder(found[0], base, products); return say(r.out, r.state); }
+        if (found.length === 1) return startOrder(found[0], base);
         const list = (found.length ? found : products).filter((p) => p.stock > 0);
         return say(
           { body: `${i.response || "Armemos tu pedido."}\n¿Qué producto querés? Escribí el nombre o elegí uno:`, options: productOptions(list, "order") },
-          { ...base, step: "order_product", productId: undefined, qty: undefined, date: undefined }
+          { ...clearOrder(base), step: "order_product" }
         );
       }
       case "productos": {
@@ -333,15 +460,25 @@ export async function runBot(input: BotInput): Promise<BotResult> {
 
   async function handleOrderStep(txt: string, k: string, v: string, s: BotState): Promise<BotResult | null> {
     const p = products.find((x) => x.id === s.productId);
+    const nt = normalize(txt);
     switch (s.step) {
       case "order_product": {
         const found = searchProducts(txt, products);
-        if (found.length === 1) { const r = startOrder(found[0], s, products); return say(r.out, r.state); }
+        if (found.length === 1) return startOrder(found[0], s);
         if (found.length > 1) return say({ body: "¿Cuál de estos?", options: productOptions(found, "order") }, s);
-        // quizás quiso otra cosa (ej. "horarios")
         const it = matchIntent(txt, intents);
-        if (it && it.action !== "pedido") return null;
+        if (it && it.action !== "pedido") return null; // quiso otra cosa (ej. "horarios")
         return say({ body: "No encontré ese producto. Elegí uno de la lista o escribí otro nombre:", options: productOptions(products.filter((x) => x.stock > 0), "order") }, s);
+      }
+      case "order_size": {
+        if (!p) return null;
+        const sizes = p.sizes || [];
+        const want = k === "size" ? v : txt.replace(/^talle\s*/i, "").trim().toUpperCase();
+        const size = sizes.find((t) => t.toUpperCase() === want.toUpperCase());
+        if (!size) {
+          return say({ body: `Ese talle no lo tenemos. Elegí uno de estos:`, options: sizes.map((t) => ({ label: t, value: `size:${t}` })) }, s);
+        }
+        return next({ ...s, size });
       }
       case "order_qty": {
         if (!p) return null;
@@ -354,43 +491,77 @@ export async function runBot(input: BotInput): Promise<BotResult> {
             options: [{ label: `Sí, ${p.stock}`, value: `qty:${p.stock}` }, { label: "Elegir otro producto", value: "menu:productos" }],
           }, s);
         }
-        const r = nextOrderStep({ ...s, qty: q }, products);
-        return say(r.out, r.state);
+        return next({ ...s, qty: q });
       }
-      case "order_date": {
-        const d = k === "date" ? v : parseDate(txt);
-        if (!d) return say({ body: "No entendí la fecha. Escribila como 20/11 o elegí una opción:", options: dateOptions() }, s);
-        if (d < isoDate(todayPY())) return say({ body: "Esa fecha ya pasó. ¿Para qué día lo querés?", options: dateOptions() }, s);
-        const r = nextOrderStep({ ...s, date: d }, products);
-        return say(r.out, r.state);
+      case "order_mode": {
+        const mode = k === "mode" ? v
+          : /retir|buscar|paso|local|tienda/.test(nt) ? "retiro"
+          : /envi|delivery|domicilio|casa|manden|mandar/.test(nt) ? "envio" : null;
+        if (mode !== "envio" && mode !== "retiro") return null;
+        return next({ ...s, mode });
+      }
+      case "order_slot": {
+        if (k === "slot") {
+          const [date, id] = v.split("|");
+          const slot = slots.find((x) => x.slot_id === id && x.date === date);
+          if (slot) return chooseSlot(s, slot);
+          return say({ body: "Ese horario ya no está disponible. Elegí otro:", options: slotOptions(slots) }, s);
+        }
+        const d = parseDate(txt);
+        if (!d) {
+          if (matchIntent(txt, intents)) return null;
+          return say({ body: "Elegí uno de los horarios o escribime el día (ej. viernes o 20/11):", options: slotOptions(slots) }, s);
+        }
+        const that = slots.filter((x) => x.date === d);
+        if (that.length === 1) return chooseSlot(s, that[0]);
+        if (that.length > 1) return say({ body: "Ese día tenemos estos horarios:", options: slotOptions(that) }, s);
+        return say({ body: "Ese día no tenemos turnos libres. Estos son los próximos disponibles:", options: slotOptions(slots) }, s);
+      }
+      case "order_address": {
+        if (txt.length < 5) return say({ body: "Pasame la dirección completa, por favor (calle, número, barrio y ciudad)." }, s);
+        return next({ ...s, address: txt.slice(0, 200) });
       }
       case "order_name": {
         const name = txt.replace(/^(soy|me llamo|mi nombre es)\s+/i, "").trim();
         if (name.length < 2) return say({ body: "¿Me decís tu nombre?" }, s);
-        const r = nextOrderStep({ ...s, name: name.slice(0, 80) }, products);
-        return say(r.out, r.state);
+        return next({ ...s, name: name.slice(0, 80) });
       }
       case "order_phone": {
         const ph = parsePhone(txt);
         if (!ph) return say({ body: "Ese número no parece válido. Escribilo así: 0981 123 456" }, s);
-        const r = nextOrderStep({ ...s, phone: ph }, products);
-        return say(r.out, r.state);
+        return next({ ...s, phone: ph });
+      }
+      case "order_payment": {
+        const pay = k === "pay" ? v
+          : payments.find((m) => nt.includes(normalize(m)) || (nt.length >= 3 && normalize(m).includes(nt)));
+        if (!pay) return say({ body: "¿Con cuál de estas opciones pagás?", options: payments.map((m) => ({ label: m, value: `pay:${m}` })) }, s);
+        return next({ ...s, payment: pay });
       }
       case "order_confirm": {
         if (!p) return null;
-        if (v === "qty") return say(askQty(p), { ...s, step: "order_qty", qty: undefined });
+        if (v === "slot") return next({ ...s, slotId: undefined, slotLabel: undefined, date: undefined });
         if (v === "no" || (!v && isNo(txt))) {
           return say({ body: "Listo, no anoté nada. ¿Te ayudo con algo más?", options: menuOptions(intents) }, clearOrder(s));
         }
         if (v === "si" || isYes(txt)) {
-          const res = await input.createOrder({ productId: p.id, qty: s.qty!, date: s.date!, name: s.name!, phone: s.phone! });
+          const res = await input.createOrder({
+            productId: p.id, size: s.size, qty: s.qty!, date: s.date!, slotId: s.slotId!, mode: s.mode!,
+            address: s.address, payment: s.payment || payments[0] || "A coordinar", name: s.name!, phone: s.phone!,
+          });
           if (res.ok) {
             const conf = res.status === "confirmado"
               ? "Ya está confirmado ✅"
               : "Una persona del equipo lo va a confirmar en breve.";
             return say(
-              { body: `¡Listo! Tu pedido #${res.orderId.slice(0, 8)} quedó agendado para el ${formatDateEs(s.date!)}. Total: ${formatGs(res.total)}.\n${conf}`, options: menuOptions(intents) },
+              { body: `¡Listo! Tu pedido #${res.orderId.slice(0, 8)} quedó agendado: ${s.slotLabel}. Total: ${formatGs(res.total)}.\n${conf}`, options: menuOptions(intents) },
               clearOrder(s)
+            );
+          }
+          if (res.slotTaken) {
+            slots = slots.filter((x) => !(x.slot_id === s.slotId && x.date === s.date));
+            return say(
+              { body: "Uy, ese horario se acaba de ocupar. Elegí otro:", options: slotOptions(slots) },
+              { ...s, step: "order_slot", slotId: undefined, slotLabel: undefined, date: undefined }
             );
           }
           if (res.shortage) {
@@ -403,7 +574,7 @@ export async function runBot(input: BotInput): Promise<BotResult> {
               options: Array.from({ length: Math.min(avail, 3) }, (_, i) => ({ label: String(i + 1), value: `qty:${i + 1}` })),
             }, { ...s, step: "order_qty", qty: undefined });
           }
-          return say({ body: "No pude guardar el pedido por un problema técnico. Te paso con una persona del equipo." }, clearOrder(s), { handoff: true });
+          return handoff(clearOrder(s), "No pude guardar el pedido por un problema técnico. Te paso con una persona del equipo.");
         }
         return say({ body: "¿Confirmo el pedido?", options: [{ label: "Sí, confirmar", value: "confirm:si" }, { label: "Cancelar", value: "confirm:no" }] }, s);
       }

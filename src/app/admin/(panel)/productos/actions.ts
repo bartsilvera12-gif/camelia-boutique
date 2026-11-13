@@ -27,6 +27,12 @@ export async function saveProduct(_prev: ProductFormState, fd: FormData): Promis
       keywords: String(fd.get("keywords") || "").trim() || null,
       price: Math.max(0, Math.round(Number(fd.get("price") || 0))),
       stock: Math.max(0, Math.round(Number(fd.get("stock") || 0))),
+      discount: Math.max(0, Math.min(100, Math.round(Number(fd.get("discount") || 0)))),
+      sizes: String(fd.get("sizes") || "")
+        .split(/[,\n]/)
+        .map((x) => x.trim().toUpperCase())
+        .filter(Boolean)
+        .slice(0, 20),
       category_id: String(fd.get("category_id") || "") || null,
       featured: fd.get("featured") === "on",
       active: fd.get("active") === "on",

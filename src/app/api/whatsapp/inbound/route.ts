@@ -107,7 +107,7 @@ export async function POST(req: Request) {
   }
 
   // ---- bot ----
-  const { settings, intents, products } = await loadBotData(sb);
+  const { settings, intents, products, slots } = await loadBotData(sb);
   const state = (c.state || {}) as WaState;
 
   // "2" → la opción 2 de la última lista numerada que mandó el bot
@@ -126,6 +126,7 @@ export async function POST(req: Request) {
     settings,
     intents,
     products,
+    slots,
     visitorName: null, // el nombre de perfil de WhatsApp no siempre es el real: se pregunta
     visitorPhone: c.visitor_phone || m.fromPhone || null,
     createOrder: botOrderCreator(sb, c, "whatsapp", notifyNewOrder),

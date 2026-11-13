@@ -4,12 +4,15 @@ import { useEffect, useState } from "react";
 import Ornament from "@/components/Ornament";
 import { formatGs } from "@/lib/format";
 import { waOrderLink } from "@/lib/whatsapp";
+import { useStore } from "@/components/StoreContext";
 import type { CartItem, Order } from "@/lib/types";
 
 type Snapshot = {
   id: string;
   items: CartItem[];
   total: number;
+  discount?: number;
+  couponCode?: string;
   name: string;
   phone: string;
   address: string;
@@ -17,10 +20,13 @@ type Snapshot = {
   delivery: string;
   payment: string;
   notes: string;
+  deliveryDate?: string;
+  deliveryTime?: string;
 };
 
 export default function ConfirmadoPage({ params }: { params: { id: string } }) {
   const [snap, setSnap] = useState<Snapshot | null>(null);
+  const { whatsappNumber } = useStore();
   useEffect(() => {
     try {
       const raw = sessionStorage.getItem("camelia-last-order");
@@ -38,6 +44,8 @@ export default function ConfirmadoPage({ params }: { params: { id: string } }) {
         delivery: snap.delivery,
         payment: snap.payment,
         notes: snap.notes,
+        delivery_date: snap.deliveryDate,
+        delivery_time: snap.deliveryTime,
         subtotal: snap.total,
         total: snap.total,
         status: "pendiente",
@@ -74,13 +82,21 @@ export default function ConfirmadoPage({ params }: { params: { id: string } }) {
                 </div>
               ))}
             </div>
-            <div className="border-t border-bisque mt-3 pt-3 flex justify-between font-serif text-lg">
+            {snap.discount && snap.discount > 0 && (
+              <div className="border-t border-bisque mt-3 pt-3 space-y-1 text-sm">
+                <div className="flex justify-between text-thyme">
+                  <span>Cupón {snap.couponCode}</span>
+                  <span>-{formatGs(snap.discount)}</span>
+                </div>
+              </div>
+            )}
+            <div className={`${snap.discount ? "border-t-0 mt-2" : "border-t border-bisque mt-3 pt-3"} flex justify-between font-serif text-lg`}>
               <span>Total</span><span className="text-rose">{formatGs(order.total)}</span>
             </div>
           </div>
 
           <a
-            href={waOrderLink(order, snap.items)}
+            href={waOrderLink(order, snap.items, { discount: snap.discount, couponCode: snap.couponCode, number: whatsappNumber })}
             target="_blank"
             rel="noreferrer"
             className="btn-wa w-full mt-6"

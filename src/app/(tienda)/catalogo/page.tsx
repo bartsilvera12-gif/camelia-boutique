@@ -1,13 +1,28 @@
 import Link from "next/link";
 import ProductCard from "@/components/ProductCard";
 import Ornament from "@/components/Ornament";
+import PriceRange from "@/components/PriceRange";
+import { StaggerGroup, StaggerItem } from "@/components/Reveal";
+import SortDropdown from "@/components/SortDropdown";
 import { getCategories, getProducts } from "@/lib/data";
 import { formatGs } from "@/lib/format";
+
+const SORT_OPTIONS = [
+  { value: "new",        label: "Más recientes" },
+  { value: "price-asc",  label: "Precio: menor" },
+  { value: "price-desc", label: "Precio: mayor" },
+  { value: "name",       label: "Nombre A-Z" },
+];
+
+// Refresca desde Supabase en cada request — evita mostrar imágenes viejas
+// cuando el admin actualiza productos por SQL o desde el panel.
+export const revalidate = 0;
 
 type SP = {
   cat?: string;
   q?: string;
   featured?: string;
+  sale?: string;
   sort?: "price-asc" | "price-desc" | "name" | "new";
   stock?: string;
   min?: string;
@@ -16,7 +31,12 @@ type SP = {
 
 export default async function CatalogoPage({ searchParams }: { searchParams: SP }) {
   const [products, categories] = await Promise.all([
-    getProducts({ categorySlug: searchParams.cat, search: searchParams.q, featured: searchParams.featured === "1" }),
+    getProducts({
+      categorySlug: searchParams.cat,
+      search: searchParams.q,
+      featured: searchParams.featured === "1",
+      onSale: searchParams.sale === "1",
+    }),
     getCategories(),
   ]);
 
@@ -33,6 +53,8 @@ export default async function CatalogoPage({ searchParams }: { searchParams: SP 
     default: break;
   }
 
+  const isRebajas = searchParams.sale === "1";
+
   return (
     <section className="max-w-6xl mx-auto px-5 md:px-8 py-12 relative">
       <div className="absolute -top-4 right-4 opacity-20 pointer-events-none hidden md:block">
@@ -40,31 +62,51 @@ export default async function CatalogoPage({ searchParams }: { searchParams: SP 
       </div>
       <div className="flex items-end justify-between mb-8 flex-wrap gap-4">
         <div>
-          <div className="eyebrow mb-2">— Catálogo</div>
+          <div className="eyebrow mb-2">{isRebajas ? "— Rebajas" : "— Catálogo"}</div>
           <h1 className="font-serif text-4xl text-ink">
-            Todos los <span className="italic text-rose">productos</span>
+            {isRebajas ? (
+              <>Ofertas <span className="italic text-rose">imperdibles</span></>
+            ) : (
+              <>Todos los <span className="italic text-rose">productos</span></>
+            )}
           </h1>
         </div>
-        <form className="flex items-center gap-2" action="/catalogo">
+        <form
+          action="/catalogo"
+          className="group flex items-center gap-2 bg-cream border border-champagne rounded-full pl-4 md:pl-5 pr-1.5 py-1 shadow-sm w-full md:w-auto md:min-w-[520px] focus-within:border-rose transition-colors"
+        >
+          <svg className="text-thyme shrink-0" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m20 20-3-3" />
+          </svg>
           <input
             name="q"
             defaultValue={searchParams.q || ""}
-            placeholder="Buscar..."
-            className="input md:w-64"
+            placeholder="Buscar"
+            className="flex-1 bg-transparent border-0 outline-none text-sm py-2 min-w-0 placeholder:text-thyme/60 placeholder:italic placeholder:font-serif"
           />
-          <select name="sort" defaultValue={searchParams.sort || "new"} className="input md:w-44">
-            <option value="new">Más recientes</option>
-            <option value="price-asc">Precio: menor a mayor</option>
-            <option value="price-desc">Precio: mayor a menor</option>
-            <option value="name">Nombre A-Z</option>
-          </select>
+          <span className="h-6 w-px bg-champagne hidden md:block" aria-hidden />
+          <div className="hidden md:block px-2">
+            <SortDropdown
+              name="sort"
+              defaultValue={searchParams.sort || "new"}
+              options={SORT_OPTIONS}
+            />
+          </div>
           {searchParams.cat && <input type="hidden" name="cat" value={searchParams.cat} />}
-          {searchParams.featured && <input type="hidden" name="featured" value={searchParams.featured} />}
-          <button className="btn-outline !py-2 !px-4">Buscar</button>
+          {searchParams.sale && <input type="hidden" name="sale" value={searchParams.sale} />}
+          {searchParams.sort && <input type="hidden" name="sort" value={searchParams.sort} />}
+          <button
+            className="rounded-full bg-thyme text-champagne text-[10px] uppercase tracking-[0.2em] px-4 md:px-5 py-2.5 hover:bg-ink transition-colors shrink-0 flex items-center gap-1.5 min-h-[40px]"
+            aria-label="Buscar"
+          >
+            <span className="text-rose">✿</span>
+            Buscar
+          </button>
         </form>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-[220px_1fr] gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-[240px_1fr] gap-8">
         {/* Filtros */}
         <aside className="space-y-6">
           <div>
@@ -86,14 +128,16 @@ export default async function CatalogoPage({ searchParams }: { searchParams: SP 
               ))}
             </ul>
           </div>
-          <form action="/catalogo" className="space-y-3">
+
+          <form action="/catalogo" className="space-y-5 bg-cream border border-champagne rounded-2xl p-4">
             {searchParams.cat && <input type="hidden" name="cat" value={searchParams.cat} />}
+            {searchParams.sale && <input type="hidden" name="sale" value={searchParams.sale} />}
             <div>
-              <div className="eyebrow mb-2">Precio (Gs.)</div>
-              <div className="flex gap-2">
-                <input name="min" defaultValue={searchParams.min} placeholder="Mín" className="input" />
-                <input name="max" defaultValue={searchParams.max} placeholder="Máx" className="input" />
-              </div>
+              <div className="eyebrow mb-3">Rango de precio</div>
+              <PriceRange
+                initialMin={Number(searchParams.min || 0) || undefined}
+                initialMax={Number(searchParams.max || 0) || undefined}
+              />
             </div>
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="stock" value="1" defaultChecked={searchParams.stock === "1"} />
@@ -103,6 +147,12 @@ export default async function CatalogoPage({ searchParams }: { searchParams: SP 
               <input type="checkbox" name="featured" value="1" defaultChecked={searchParams.featured === "1"} />
               Sólo destacados
             </label>
+            {!isRebajas && (
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" name="sale" value="1" defaultChecked={searchParams.sale === "1"} />
+                Sólo en rebajas
+              </label>
+            )}
             <button className="btn-outline !py-2 w-full">Aplicar filtros</button>
           </form>
         </aside>
@@ -118,9 +168,18 @@ export default async function CatalogoPage({ searchParams }: { searchParams: SP 
               <div className="text-xs text-thyme mb-4">
                 {list.length} producto{list.length === 1 ? "" : "s"} · desde {formatGs(Math.min(...list.map((p) => p.price)))}
               </div>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-5">
-                {list.map((p) => <ProductCard key={p.id} p={p} />)}
-              </div>
+              <StaggerGroup
+                key={`${searchParams.cat ?? ""}|${searchParams.sale ?? ""}|${searchParams.featured ?? ""}|${searchParams.q ?? ""}|${searchParams.sort ?? ""}|${searchParams.stock ?? ""}|${searchParams.min ?? ""}|${searchParams.max ?? ""}`}
+                className="grid grid-cols-2 md:grid-cols-3 gap-5"
+                stagger={0.06}
+                amount={0.05}
+              >
+                {list.map((p) => (
+                  <StaggerItem key={p.id}>
+                    <ProductCard p={p} />
+                  </StaggerItem>
+                ))}
+              </StaggerGroup>
             </>
           )}
         </div>

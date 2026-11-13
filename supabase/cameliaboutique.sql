@@ -70,6 +70,20 @@ create table if not exists cameliaboutique.products (
 create index if not exists cb_products_category_idx on cameliaboutique.products(category_id);
 create index if not exists cb_products_active_idx   on cameliaboutique.products(active) where active;
 
+alter table cameliaboutique.products add column if not exists discount integer not null default 0
+  check (discount >= 0 and discount <= 100);                                    -- % de rebaja (0 = sin rebaja)
+alter table cameliaboutique.products add column if not exists sizes text[] not null default '{}'; -- talles
+
+-- cupones (antes estaban fijos en el código)
+create table if not exists cameliaboutique.coupons (
+  code        text primary key check (code = upper(code)),
+  percent     integer not null check (percent between 1 and 100),
+  label       text,
+  active      boolean not null default true,
+  valid_until date,
+  created_at  timestamptz not null default now()
+);
+
 -- ---------------------------------------------------------------------
 --  CONTACTOS / CLIENTES (checkout + bot)
 -- ---------------------------------------------------------------------
@@ -122,6 +136,25 @@ create table if not exists cameliaboutique.messages (
 create index if not exists cb_messages_conv_idx on cameliaboutique.messages(conversation_id, created_at);
 
 -- ---------------------------------------------------------------------
+--  TURNOS DE ENTREGA (la agenda que ofrecen el bot y el checkout)
+--  Cada turno es un día de la semana + franja horaria + cupo de pedidos.
+-- ---------------------------------------------------------------------
+create table if not exists cameliaboutique.delivery_slots (
+  id         uuid primary key default gen_random_uuid(),
+  weekday    smallint not null check (weekday between 0 and 6),   -- 0 = domingo
+  start_time time not null,
+  end_time   time not null check (end_time > start_time),
+  capacity   integer not null default 5 check (capacity > 0),     -- pedidos por turno
+  active     boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists cameliaboutique.delivery_closed_days (
+  day    date primary key,                                        -- feriados, vacaciones
+  reason text
+);
+
+-- ---------------------------------------------------------------------
 --  PEDIDOS / AGENDA
 -- ---------------------------------------------------------------------
 do $$ begin
@@ -152,6 +185,11 @@ create index if not exists cb_orders_status_idx   on cameliaboutique.orders(stat
 create index if not exists cb_orders_created_idx  on cameliaboutique.orders(created_at desc);
 create index if not exists cb_orders_delivery_idx on cameliaboutique.orders(delivery_date);
 
+alter table cameliaboutique.orders add column if not exists delivery_slot_id uuid
+  references cameliaboutique.delivery_slots(id) on delete set null;
+alter table cameliaboutique.orders add column if not exists delivery_time text;   -- "09:00 a 12:00"
+create index if not exists cb_orders_slot_idx on cameliaboutique.orders(delivery_date, delivery_slot_id);
+
 create table if not exists cameliaboutique.order_items (
   id         uuid primary key default gen_random_uuid(),
   order_id   uuid not null references cameliaboutique.orders(id) on delete cascade,
@@ -162,6 +200,9 @@ create table if not exists cameliaboutique.order_items (
   subtotal   numeric(12,0) not null
 );
 create index if not exists cb_order_items_order_idx on cameliaboutique.order_items(order_id);
+alter table cameliaboutique.order_items add column if not exists size text;
+alter table cameliaboutique.orders add column if not exists discount numeric(12,0) not null default 0;  -- descuento del cupón
+alter table cameliaboutique.orders add column if not exists coupon_code text;
 
 -- ---------------------------------------------------------------------
 --  BOT: respuestas / palabras clave
@@ -185,7 +226,7 @@ create table if not exists cameliaboutique.bot_intents (
 create table if not exists cameliaboutique.settings (
   id               integer primary key default 1 check (id = 1),
   store_name       text not null default 'Camélia Boutique',
-  whatsapp_number  text not null default '595981000000',
+  whatsapp_number  text not null default '595981772872',
   email            text default 'hola@camelia.py',
   address          text default 'Asunción, Paraguay',
   hours            text not null default 'Lunes a viernes de 9:00 a 19:00 y sábados de 9:00 a 13:00.',
@@ -203,6 +244,12 @@ create table if not exists cameliaboutique.settings (
   updated_at       timestamptz not null default now()
 );
 insert into cameliaboutique.settings (id) values (1) on conflict (id) do nothing;
+
+alter table cameliaboutique.settings add column if not exists payment_methods text[] not null
+  default array['Transferencia','Efectivo','Tarjeta','QR'];
+alter table cameliaboutique.settings add column if not exists pickup_enabled      boolean not null default true;
+alter table cameliaboutique.settings add column if not exists delivery_lead_days  integer not null default 0;  -- días mínimos de anticipación
+alter table cameliaboutique.settings add column if not exists delivery_days_ahead integer not null default 14; -- hasta cuántos días adelante se ofrecen turnos
 
 -- ---------------------------------------------------------------------
 --  updated_at
@@ -291,6 +338,14 @@ declare
   v_status   cameliaboutique.order_status := 'pendiente';
   v_conv     uuid;
   v_items    jsonb;
+  v_lines    jsonb;
+  v_subtotal numeric;
+  v_disc     numeric := 0;
+  v_coupon   cameliaboutique.coupons;
+  v_slot     cameliaboutique.delivery_slots;
+  v_date     date;
+  v_time     text;
+  v_now      timestamp := now() at time zone 'America/Asuncion';
 begin
   if v_source not in ('web','bot','whatsapp') then v_source := 'web'; end if;
   if v_name = '' or v_phone = '' then
@@ -300,11 +355,15 @@ begin
     return jsonb_build_object('ok', false, 'error', 'El pedido está vacío');
   end if;
 
-  -- agrupa ítems repetidos
+  -- líneas por producto + talle, y totales por producto para el stock
+  select coalesce(jsonb_agg(jsonb_build_object('product_id', s.pid, 'size', s.sz, 'qty', s.q) order by s.pid, s.sz), '[]'::jsonb)
+    into v_lines
+    from (select (e->>'product_id')::uuid as pid, nullif(trim(e->>'size'), '') as sz, sum((e->>'qty')::int) as q
+            from jsonb_array_elements(p->'items') e group by 1, 2) s;
   select coalesce(jsonb_agg(jsonb_build_object('product_id', s.pid, 'qty', s.q) order by s.pid), '[]'::jsonb)
     into v_items
-    from (select (e->>'product_id')::uuid as pid, sum((e->>'qty')::int) as q
-            from jsonb_array_elements(p->'items') e group by 1) s;
+    from (select (l->>'product_id')::uuid as pid, sum((l->>'qty')::int) as q
+            from jsonb_array_elements(v_lines) l group by 1) s;
   if exists (select 1 from jsonb_to_recordset(v_items) i(product_id uuid, qty int)
               where i.qty is null or i.qty <= 0) then
     return jsonb_build_object('ok', false, 'error', 'Cantidad inválida');
@@ -317,7 +376,7 @@ begin
      for update;
 
   for v_r in
-    select i.product_id, i.qty, pr.id as pid, pr.name, pr.stock, pr.price, pr.active
+    select i.product_id, i.qty, pr.id as pid, pr.name, pr.stock, pr.price, pr.discount, pr.active
       from jsonb_to_recordset(v_items) i(product_id uuid, qty int)
       left join cameliaboutique.products pr on pr.id = i.product_id
      order by i.product_id
@@ -327,12 +386,47 @@ begin
     elsif v_r.stock < v_r.qty then
       v_short := v_short || jsonb_build_object('product_id', v_r.product_id, 'name', v_r.name, 'requested', v_r.qty, 'available', v_r.stock);
     else
-      v_total := v_total + v_r.price * v_r.qty;
+      v_total := v_total + round(v_r.price * (100 - v_r.discount) / 100.0) * v_r.qty;
     end if;
   end loop;
 
   if jsonb_array_length(v_short) > 0 then
     return jsonb_build_object('ok', false, 'error', 'stock', 'shortages', v_short);
+  end if;
+
+  -- cupón: se valida en la base, el navegador solo muestra el cálculo
+  v_subtotal := v_total;
+  if nullif(trim(p->>'coupon'), '') is not null then
+    select * into v_coupon from cameliaboutique.coupons
+     where code = upper(trim(p->>'coupon')) and active
+       and (valid_until is null or valid_until >= (now() at time zone 'America/Asuncion')::date);
+    if v_coupon.code is null then
+      return jsonb_build_object('ok', false, 'error', 'cupon');
+    end if;
+    v_disc  := round(v_subtotal * v_coupon.percent / 100.0);
+    v_total := v_subtotal - v_disc;
+  end if;
+
+  -- turno de entrega: se bloquea la fila del turno y se cuenta el cupo,
+  -- así dos clientes no pueden ocupar el último lugar al mismo tiempo
+  v_date := nullif(p->>'delivery_date','')::date;
+  if nullif(p->>'delivery_slot_id','') is not null then
+    select * into v_slot from cameliaboutique.delivery_slots
+     where id = (p->>'delivery_slot_id')::uuid and active
+       for update;
+    if v_slot.id is null or v_date is null
+       or extract(dow from v_date)::int <> v_slot.weekday
+       or v_date < v_now::date
+       or (v_date = v_now::date and v_slot.start_time <= v_now::time)
+       or exists (select 1 from cameliaboutique.delivery_closed_days c where c.day = v_date) then
+      return jsonb_build_object('ok', false, 'error', 'slot');
+    end if;
+    if (select count(*) from cameliaboutique.orders o
+         where o.delivery_date = v_date and o.delivery_slot_id = v_slot.id and o.status <> 'cancelado')
+       >= v_slot.capacity then
+      return jsonb_build_object('ok', false, 'error', 'slot_full');
+    end if;
+    v_time := to_char(v_slot.start_time, 'HH24:MI') || ' a ' || to_char(v_slot.end_time, 'HH24:MI');
   end if;
 
   -- contacto: reutiliza por teléfono
@@ -361,20 +455,23 @@ begin
 
   insert into cameliaboutique.orders
     (customer_id, conversation_id, source, customer_name, phone, email, address, city,
-     delivery, payment, delivery_date, notes, subtotal, total, status)
+     delivery, payment, delivery_date, delivery_slot_id, delivery_time, notes, subtotal, discount, coupon_code, total, status)
   values
     (v_customer, v_conv, v_source, v_name, v_phone, nullif(p->>'email',''),
      nullif(p->>'address',''), nullif(p->>'city',''),
-     coalesce(nullif(p->>'delivery',''), 'delivery'),
-     coalesce(nullif(p->>'payment',''), 'transferencia'),
-     nullif(p->>'delivery_date','')::date,
-     nullif(p->>'notes',''), v_total, v_total, v_status)
+     case when p->>'delivery' = 'pickup' then 'pickup' else 'delivery' end,
+     coalesce(nullif(p->>'payment',''), 'Transferencia'),
+     v_date, v_slot.id, v_time,
+     nullif(p->>'notes',''), v_subtotal, v_disc, v_coupon.code, v_total, v_status)
   returning id into v_order;
 
-  insert into cameliaboutique.order_items (order_id, product_id, name, price, qty, subtotal)
-  select v_order, pr.id, pr.name, pr.price, i.qty, pr.price * i.qty
-    from jsonb_to_recordset(v_items) i(product_id uuid, qty int)
-    join cameliaboutique.products pr on pr.id = i.product_id;
+  insert into cameliaboutique.order_items (order_id, product_id, name, size, price, qty, subtotal)
+  select v_order, pr.id,
+         pr.name || coalesce(' (' || l.size || ')', ''), l.size,
+         round(pr.price * (100 - pr.discount) / 100.0), l.qty,
+         round(pr.price * (100 - pr.discount) / 100.0) * l.qty
+    from jsonb_to_recordset(v_lines) l(product_id uuid, size text, qty int)
+    join cameliaboutique.products pr on pr.id = l.product_id;
 
   update cameliaboutique.products pr set stock = pr.stock - i.qty
     from jsonb_to_recordset(v_items) i(product_id uuid, qty int) where pr.id = i.product_id;
@@ -383,7 +480,8 @@ begin
     update cameliaboutique.conversations set customer_id = v_customer where id = v_conv;
   end if;
 
-  return jsonb_build_object('ok', true, 'order_id', v_order, 'total', v_total, 'status', v_status);
+  return jsonb_build_object('ok', true, 'order_id', v_order, 'subtotal', v_subtotal, 'discount', v_disc,
+                            'total', v_total, 'status', v_status);
 exception
   when invalid_text_representation or invalid_datetime_format or datetime_field_overflow then
     return jsonb_build_object('ok', false, 'error', 'Datos inválidos');
@@ -403,11 +501,54 @@ set search_path = cameliaboutique, pg_temp as $$
         'address', address, 'hours', hours, 'bot_enabled', bot_enabled, 'bot_name', bot_name,
         'welcome_message', welcome_message, 'fallback_message', fallback_message,
         'handoff_message', handoff_message, 'offline_message', offline_message,
-        'audio_message', audio_message)
+        'audio_message', audio_message, 'payment_methods', payment_methods,
+        'pickup_enabled', pickup_enabled)
       from cameliaboutique.settings where id = 1),
     'intents', coalesce((select jsonb_agg(to_jsonb(b) - 'created_at' order by b.sort_order, b.name)
       from cameliaboutique.bot_intents b where b.active), '[]'::jsonb)
   );
+$$;
+
+-- Cupón válido (para mostrar el descuento en el checkout)
+create or replace function cameliaboutique.check_coupon(p_code text)
+returns jsonb language sql stable security definer
+set search_path = cameliaboutique, pg_temp as $$
+  select coalesce(
+    (select jsonb_build_object('ok', true, 'code', code, 'percent', percent, 'label', label)
+       from cameliaboutique.coupons
+      where code = upper(trim(coalesce(p_code, ''))) and active
+        and (valid_until is null or valid_until >= (now() at time zone 'America/Asuncion')::date)),
+    jsonb_build_object('ok', false));
+$$;
+
+-- Turnos con lugar libre: días hábiles según la agenda, sin feriados, sin turnos
+-- de hoy que empiecen en menos de una hora y sin turnos llenos.
+create or replace function cameliaboutique.available_slots(p_days integer default null)
+returns jsonb language sql stable security definer
+set search_path = cameliaboutique, pg_temp as $$
+  with cfg as (
+    select delivery_lead_days as lead, least(coalesce(p_days, delivery_days_ahead), 60) as ahead
+      from cameliaboutique.settings where id = 1
+  ), ahora as (
+    select now() at time zone 'America/Asuncion' as ts
+  ), dias as (
+    select (a.ts::date + g)::date as d
+      from ahora a, cfg, generate_series(cfg.lead, greatest(cfg.lead, cfg.ahead)) g
+  )
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'slot_id', sl.id, 'date', d.d,
+           'start', to_char(sl.start_time, 'HH24:MI'), 'end', to_char(sl.end_time, 'HH24:MI'),
+           'remaining', sl.capacity - o.n) order by d.d, sl.start_time), '[]'::jsonb)
+    from dias d
+    cross join ahora a
+    join cameliaboutique.delivery_slots sl on sl.active and sl.weekday = extract(dow from d.d)::int
+    cross join lateral (
+      select count(*)::int as n from cameliaboutique.orders o
+       where o.delivery_date = d.d and o.delivery_slot_id = sl.id and o.status <> 'cancelado'
+    ) o
+   where not exists (select 1 from cameliaboutique.delivery_closed_days c where c.day = d.d)
+     and (d.d > a.ts::date or sl.start_time > a.ts::time + interval '1 hour')
+     and sl.capacity - o.n > 0;
 $$;
 
 -- Abre (o retoma) una conversación
@@ -633,6 +774,9 @@ alter table cameliaboutique.orders        enable row level security;
 alter table cameliaboutique.order_items   enable row level security;
 alter table cameliaboutique.bot_intents   enable row level security;
 alter table cameliaboutique.settings      enable row level security;
+alter table cameliaboutique.delivery_slots       enable row level security;
+alter table cameliaboutique.coupons              enable row level security;
+alter table cameliaboutique.delivery_closed_days enable row level security;
 
 -- lectura pública del catálogo activo
 drop policy if exists cb_public_categories on cameliaboutique.categories;
@@ -652,7 +796,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['admins','categories','products','customers','conversations',
-                           'messages','orders','order_items','bot_intents','settings']
+                           'messages','orders','order_items','bot_intents','settings',
+                           'delivery_slots','delivery_closed_days','coupons']
   loop
     execute format('drop policy if exists cb_admin_all on cameliaboutique.%I', t);
     execute format('create policy cb_admin_all on cameliaboutique.%I for all to authenticated
@@ -687,6 +832,8 @@ revoke all on cameliaboutique.wa_config, cameliaboutique.wa_seen from anon, auth
 grant execute on function cameliaboutique.wa_inbound(text, text, text, text, text)  to anon, authenticated, service_role;
 grant execute on function cameliaboutique.wa_agent_message(text, uuid, text)        to anon, authenticated, service_role;
 grant execute on function cameliaboutique.wa_order_alert(text, uuid)                to anon, authenticated, service_role;
+grant execute on function cameliaboutique.available_slots(integer)                 to anon, authenticated, service_role;
+grant execute on function cameliaboutique.check_coupon(text)                        to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------
 --  STORAGE: bucket "cameliaboutique" (imágenes públicas, solo admin sube)
@@ -769,6 +916,43 @@ select * from (values
                       '¡De nada! Si necesitás algo más, acá estoy 🌸', 'respuesta', null, 10)
 ) v(name, keywords, response, action, menu_label, sort_order)
 where not exists (select 1 from cameliaboutique.bot_intents);
+
+-- turnos de entrega iniciales: lunes a viernes mañana y tarde, sábados a la mañana
+insert into cameliaboutique.delivery_slots (weekday, start_time, end_time, capacity)
+select v.wd, v.st::time, v.en::time, 5
+  from (values (1,'09:00','12:00'),(1,'14:00','18:00'),(2,'09:00','12:00'),(2,'14:00','18:00'),
+               (3,'09:00','12:00'),(3,'14:00','18:00'),(4,'09:00','12:00'),(4,'14:00','18:00'),
+               (5,'09:00','12:00'),(5,'14:00','18:00'),(6,'09:00','12:00')) v(wd, st, en)
+ where not exists (select 1 from cameliaboutique.delivery_slots);
+
+insert into cameliaboutique.coupons (code, percent, label)
+values ('CAMELIA10', 10, '10% off en tu primera compra')
+on conflict (code) do nothing;
+
+-- Rebajas, talles y fotos de la versión 2 de la tienda. Se aplica UNA sola vez
+-- (después cada cosa se edita desde el panel y no se vuelve a pisar).
+alter table cameliaboutique.settings add column if not exists v2_data_applied boolean not null default false;
+do $$
+begin
+  if not (select v2_data_applied from cameliaboutique.settings where id = 1) then
+    update cameliaboutique.products set discount = v.d from (values
+      ('tapado-bisque',15),('cardigan-champagne',20),('blusa-antique',10),
+      ('pashmina-bisque',25),('cinturon-thyme',30),('trench-champagne',35)) v(slug, d)
+     where products.slug = v.slug and products.discount = 0;
+    update cameliaboutique.products p set sizes = array['XS','S','M','L','XL']
+     where p.sizes = '{}' and p.category_id in
+       (select id from cameliaboutique.categories where slug in ('sacos','sueteres','remeras'));
+    update cameliaboutique.products set images = array[v.img] from (values
+      ('saco-camelia','/products/saco-camelia.webp'),('trench-champagne','/products/trench-champagne.webp'),
+      ('sueter-thyme','/products/sueter-thyme.jpeg'),('cardigan-champagne','/products/cardigan-champagne.jpeg'),
+      ('remera-blush','/products/remera-blush.webp'),('blusa-antique','/products/blusa-antique.jpg'),
+      ('bufanda-rose','/products/bufanda-rose.webp'),('cinturon-thyme','/products/cinturon-thyme.webp'),
+      ('pashmina-bisque','/products/pashmina-bisque.webp')) v(slug, img)
+     where products.slug = v.slug and products.images = '{}';
+    update cameliaboutique.settings set whatsapp_number = '595981772872' where id = 1 and whatsapp_number = '595981000000';
+    update cameliaboutique.settings set v2_data_applied = true where id = 1;
+  end if;
+end $$;
 
 -- Para el realtime del panel no hace falta nada: el panel consulta cada pocos segundos.
 -- Exponer el schema: agregar "cameliaboutique" a PGRST_DB_SCHEMAS y reiniciar rest.

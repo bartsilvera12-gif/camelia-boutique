@@ -28,6 +28,7 @@ export default function OrderCard({ o }: { o: Order }) {
         </span>
         <span className="text-xs text-thyme hidden md:block">
           {o.delivery_date ? new Date(o.delivery_date + "T12:00:00Z").toLocaleDateString("es-PY", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }) : "Sin fecha"}
+          {o.delivery_time && <span className="block">{o.delivery_time}</span>}
         </span>
         <span className="text-rose text-right md:text-left">{formatGs(o.total)}</span>
       </summary>
@@ -42,6 +43,12 @@ export default function OrderCard({ o }: { o: Order }) {
               </li>
             ))}
           </ul>
+          {!!o.discount && o.discount > 0 && (
+            <div className="border-t border-champagne mt-2 pt-2 space-y-0.5 text-xs text-thyme">
+              <div className="flex justify-between"><span>Subtotal</span><span>{formatGs(o.subtotal)}</span></div>
+              <div className="flex justify-between"><span>Cupón {o.coupon_code}</span><span>-{formatGs(o.discount)}</span></div>
+            </div>
+          )}
           <div className="border-t border-champagne mt-2 pt-2 flex justify-between font-medium">
             <span>Total</span><span className="text-rose">{formatGs(o.total)}</span>
           </div>
@@ -55,7 +62,10 @@ export default function OrderCard({ o }: { o: Order }) {
           </div>
           {o.email && <div>{o.email}</div>}
           {o.address && <div>{o.address}{o.city ? `, ${o.city}` : ""}</div>}
-          <div className="text-xs text-thyme">Entrega: {o.delivery} · Pago: {o.payment}</div>
+          <div className="text-xs text-thyme">
+            {o.delivery === "pickup" ? "Retira en el local" : "Envío a domicilio"}
+            {o.delivery_time ? ` · ${o.delivery_time}` : ""} · Pago: {o.payment}
+          </div>
           <div className="flex items-center gap-2 pt-1">
             <span className="text-xs text-thyme">Fecha agendada:</span>
             <DateInput id={o.id} date={o.delivery_date} />

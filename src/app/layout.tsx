@@ -2,7 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Camélia Boutique — Moda con alma Art Nouveau",
+  title: "Camélia — Boutique de moda femenina",
   description:
     "Boutique online de moda femenina. Sacos, suéteres, remeras, bufandas y accesorios seleccionados a mano.",
 };

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { requireAdmin } from "@/lib/admin";
-import { formatGs } from "@/lib/format";
+import { finalPrice, formatGs } from "@/lib/format";
 import { productColor, productPhotos } from "@/lib/images";
 import type { Category, Product } from "@/lib/types";
 import QuickToggle from "./QuickToggle";
@@ -69,7 +69,17 @@ export default async function AdminProductosPage({ searchParams }: { searchParam
                     </Link>
                   </td>
                   <td className="px-4 py-2">{categories.find((c) => c.id === p.category_id)?.name ?? "—"}</td>
-                  <td className="px-4 py-2 text-rose">{formatGs(p.price)}</td>
+                  <td className="px-4 py-2 text-rose">
+                    {p.discount ? (
+                      <>
+                        {formatGs(finalPrice(p))}
+                        <span className="block text-[11px] text-thyme line-through">{formatGs(p.price)}</span>
+                        <span className="text-[10px] uppercase tracking-widest text-rose">-{p.discount}%</span>
+                      </>
+                    ) : (
+                      formatGs(p.price)
+                    )}
+                  </td>
                   <td className={"px-4 py-2 " + (p.stock === 0 ? "text-rose" : p.stock <= 3 ? "text-bisque" : "")}>{p.stock}</td>
                   <td className="px-4 py-2"><QuickToggle id={p.id} field="active" value={p.active} /></td>
                   <td className="px-4 py-2"><QuickToggle id={p.id} field="featured" value={p.featured} /></td>

@@ -20,6 +20,8 @@ export type Product = {
   featured: boolean;
   active: boolean;
   category?: Category | null;
+  discount?: number; // 0-100 % (0 = sin rebaja)
+  sizes?: string[]; // ["XS","S","M","L","XL"] o [] para accesorios
 };
 
 export type CartItem = {
@@ -30,6 +32,7 @@ export type CartItem = {
   qty: number;
   image?: string;
   stock: number;
+  size?: string;
 };
 
 export type OrderStatus =
@@ -62,8 +65,12 @@ export type Order = {
   delivery: string;
   payment: string;
   delivery_date?: string | null;
+  delivery_slot_id?: string | null;
+  delivery_time?: string | null;
   notes?: string | null;
   subtotal: number;
+  discount?: number;
+  coupon_code?: string | null;
   total: number;
   status: OrderStatus;
   created_at: string;
@@ -75,6 +82,7 @@ export type OrderItem = {
   order_id: string;
   product_id: string | null;
   name: string;
+  size?: string | null;
   price: number;
   qty: number;
   subtotal: number;
@@ -153,4 +161,26 @@ export type StoreSettings = {
   notify_email?: string | null;
   wa_bot_enabled?: boolean;
   wa_notify_orders?: boolean;
+  payment_methods?: string[];
+  pickup_enabled?: boolean;
+  delivery_lead_days?: number;
+  delivery_days_ahead?: number;
+};
+
+/** Turno de entrega con lugar libre (sale de available_slots()). */
+export type DeliverySlot = {
+  slot_id: string;
+  date: string;   // YYYY-MM-DD
+  start: string;  // HH:MM
+  end: string;
+  remaining: number;
+};
+
+export type DeliverySlotRow = {
+  id: string;
+  weekday: number;
+  start_time: string;
+  end_time: string;
+  capacity: number;
+  active: boolean;
 };

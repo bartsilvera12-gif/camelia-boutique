@@ -2,10 +2,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import Ornament from "@/components/Ornament";
-import { isImageUrl } from "@/lib/images";
 import { useCart } from "@/lib/cart-store";
 import { formatGs } from "@/lib/format";
-import { waCartLink } from "@/lib/whatsapp";
 
 export default function CarritoPage() {
   const [mounted, setMounted] = useState(false);
@@ -36,13 +34,8 @@ export default function CarritoPage() {
           <div className="space-y-3">
             {items.map((i) => (
               <div key={i.productId} className="bg-cream border border-champagne rounded-xl p-4 flex gap-4 items-center">
-                <div className="w-20 h-24 rounded-lg overflow-hidden flex items-center justify-center" style={{ background: i.image?.startsWith("#") ? i.image : "#F0C4CB" }}>
-                  {isImageUrl(i.image) ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={i.image} alt={i.name} className="w-full h-full object-cover" />
-                  ) : (
-                    <Ornament size={60} opacity={0.7} />
-                  )}
+                <div className="w-20 h-24 rounded-lg flex items-center justify-center" style={{ background: i.image?.startsWith("#") ? i.image : "#F0C4CB" }}>
+                  <Ornament size={60} opacity={0.7} />
                 </div>
                 <div className="flex-1">
                   <Link href={`/producto/${i.slug}`} className="font-serif text-lg text-ink">{i.name}</Link>
@@ -74,12 +67,6 @@ export default function CarritoPage() {
               <span>Total</span><span className="text-rose">{formatGs(subtotal)}</span>
             </div>
             <Link href="/checkout" className="btn-primary w-full mt-4">Continuar al checkout</Link>
-            <a
-              href={waCartLink(items, subtotal)}
-              target="_blank"
-              rel="noreferrer"
-              className="btn-wa w-full mt-3"
-            >Consultar por WhatsApp</a>
           </aside>
         </div>
       )}

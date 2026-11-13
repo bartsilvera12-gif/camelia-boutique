@@ -81,15 +81,24 @@ export default function ProductForm({ product, categories }: { product?: Product
             {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="label">Precio (Gs.)</label>
             <input name="price" type="number" min={0} step={1} required defaultValue={product?.price ?? ""} className="input" />
           </div>
           <div>
+            <label className="label">Rebaja %</label>
+            <input name="discount" type="number" min={0} max={100} step={1} defaultValue={product?.discount ?? 0} className="input" />
+          </div>
+          <div>
             <label className="label">Stock</label>
             <input name="stock" type="number" min={0} step={1} required defaultValue={product?.stock ?? 0} className="input" />
           </div>
+        </div>
+        <div className="md:col-span-2">
+          <label className="label">Talles</label>
+          <input name="sizes" defaultValue={(product?.sizes || []).join(", ")} className="input" placeholder="XS, S, M, L, XL  (vacío = sin talles)" />
+          <p className="text-[11px] text-thyme mt-1">Separados por coma. Con rebaja &gt; 0 el producto aparece en Rebajas.</p>
         </div>
         <div className="md:col-span-2">
           <label className="label">Descripción</label>
