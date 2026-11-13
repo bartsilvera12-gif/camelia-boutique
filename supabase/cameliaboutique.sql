@@ -267,7 +267,7 @@ create table if not exists cameliaboutique.settings (
   bot_name         text not null default 'Camila',
   welcome_message  text not null default '¡Hola! Soy Camila, la asistente de Camélia Boutique 🌸 ¿En qué te ayudo?',
   fallback_message text not null default 'Perdón, no te entendí bien. Podés elegir una opción o escribir el nombre de un producto.',
-  handoff_message  text not null default 'Listo, le aviso a una persona del equipo. Te responden por acá en breve.',
+  handoff_message  text not null default 'Listo 🙌 Vas a ser atendido por una persona de nuestro equipo. Te responden por acá en breve.',
   offline_message  text not null default 'En este momento el asistente está apagado. Dejanos tu mensaje y te respondemos apenas podamos.',
   audio_message    text not null default 'Todavía no puedo escuchar audios 🙈 ¿Me lo escribís o elegís una opción?',
   notify_name      text,            -- a quién se avisa cuando entra un pedido (solo admin)
@@ -1235,4 +1235,8 @@ update cameliaboutique.conversations set human_since = last_message_at
 -- Exponer el schema: agregar "cameliaboutique" a PGRST_DB_SCHEMAS y reiniciar rest.
 
 -- Que la API (PostgREST) recargue el schema: sin esto no ve las funciones ni columnas nuevas.
+-- texto nuevo al pasar con una persona (solo si seguía el de antes)
+update cameliaboutique.settings set handoff_message = 'Listo 🙌 Vas a ser atendido por una persona de nuestro equipo. Te responden por acá en breve.'
+ where id = 1 and handoff_message = 'Listo, le aviso a una persona del equipo. Te responden por acá en breve.';
+
 notify pgrst, 'reload schema';

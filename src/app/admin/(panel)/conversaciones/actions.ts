@@ -40,8 +40,22 @@ export async function replyConversation(id: string, body: string) {
   }
 }
 
+/** Lo que recibe el cliente cuando alguien del equipo toma la conversación. */
+const TAKEN_MESSAGE = "👋 Desde ahora te atiende una persona de nuestro equipo. Enseguida te respondemos por acá.";
+
 export async function setConversationStatus(id: string, status: ConversationStatus) {
   const { sb, user } = await adminAction();
+  // al tomarla, se le avisa al cliente por WhatsApp (una sola vez, si no la tenía ya el equipo)
+  if (status === "humano") {
+    const { data: conv } = await sb.from("conversations").select("status, channel, wa_id").eq("id", id).maybeSingle();
+    if (conv && conv.status !== "humano" && conv.channel === "whatsapp" && conv.wa_id) {
+      // se guarda antes de enviar para que el eco del envío se reconozca
+      const { data: msg } = await sb.from("messages").insert({ conversation_id: id, sender: "bot", body: TAKEN_MESSAGE }).select("id").single();
+      const r = await sendWhatsApp(conv.wa_id, TAKEN_MESSAGE);
+      if (!r.ok && msg) await sb.from("messages").delete().eq("id", msg.id);
+      else await sb.from("conversations").update({ last_message: TAKEN_MESSAGE, last_message_at: new Date().toISOString() }).eq("id", id);
+    }
+  }
   const patch: Record<string, unknown> = { status };
   if (status === "humano") { patch.taken_by = user.email; patch.needs_human = false; }
   if (status === "bot") { patch.taken_by = null; patch.needs_human = false; patch.state = {}; }

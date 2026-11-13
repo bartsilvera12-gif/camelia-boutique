@@ -38,6 +38,7 @@ export type BotState = {
   phone?: string;
   misses?: number;
   offlineSent?: boolean;
+  greeted?: boolean;    // ya se presentó en esta conversación
 };
 
 // letters: en WhatsApp las opciones van con letras (A, B…) para no confundirlas con una cantidad
@@ -251,7 +252,33 @@ function slotOptions(slots: DeliverySlot[]): ChatOption[] {
 
 // ---------------------------------------------------------------------
 
+/**
+ * En el primer mensaje de la conversación el bot se presenta y después responde lo que
+ * le preguntaron (si lo primero es un saludo, la bienvenida ya es la presentación).
+ */
 export async function runBot(input: BotInput): Promise<BotResult> {
+  const r = await answer(input);
+  // (si estaba a mitad de un pedido no se interrumpe con la presentación)
+  if (!input.state.greeted && !input.state.step) {
+    const { settings } = input;
+    const first = r.messages[0];
+    const isWelcome = !!first && first.body.trim() === (settings.welcome_message || "").trim();
+    if (!isWelcome) {
+      const name = settings.bot_name?.trim();
+      const store = settings.store_name?.trim() || "la tienda";
+      const intro = `¡Hola! Soy ${name ? name + ", " : ""}la asistente virtual de ${store} 🌸 Te voy a ayudar con tu consulta.`;
+      // la respuesta no repite el "¡Hola!" que ya va en la presentación
+      const rest = r.messages.map((m, i) =>
+        i === 0 ? { ...m, body: m.body.replace(/^\s*¡?hola\b[^!.\n]{0,30}[!.]\s*/i, "") || m.body } : m
+      );
+      r.messages = [{ body: intro }, ...rest];
+    }
+  }
+  r.state = { ...r.state, greeted: true };
+  return r;
+}
+
+async function answer(input: BotInput): Promise<BotResult> {
   const { settings, intents, products } = input;
   let slots = input.slots;
   const payments = (settings.payment_methods || []).filter(Boolean);
