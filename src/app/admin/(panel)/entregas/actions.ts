@@ -70,3 +70,32 @@ export async function saveDeliverySettings(fd: FormData) {
   if (error) throw new Error(error.message);
   refresh();
 }
+
+export async function saveShipping(fd: FormData) {
+  const { sb } = await adminAction();
+  const id = String(fd.get("id") || "");
+  const name = String(fd.get("name") || "").trim();
+  if (!name) throw new Error("Poné un nombre");
+  const kind = fd.get("kind") === "retiro" ? "retiro" : "envio";
+  const payload = {
+    name,
+    description: String(fd.get("description") || "").trim() || null,
+    price: Math.max(0, Math.round(Number(fd.get("price") || 0))),
+    kind,
+    sort_order: Math.round(Number(fd.get("sort_order") || 0)),
+    active: id ? fd.get("active") === "on" : true,
+  };
+  const { error } = id
+    ? await sb.from("shipping_methods").update(payload).eq("id", id)
+    : await sb.from("shipping_methods").insert(payload);
+  if (error) throw new Error(error.message);
+  refresh();
+  revalidatePath("/checkout");
+}
+
+export async function deleteShipping(id: string) {
+  const { sb } = await adminAction();
+  const { error } = await sb.from("shipping_methods").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+  refresh();
+}

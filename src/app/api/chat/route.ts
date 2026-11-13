@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { publicClient } from "@/lib/supabase/public";
 import { runBot, welcome, type BotState } from "@/lib/bot/engine";
 import type { BotIntent, StoreSettings } from "@/lib/types";
-import { botOrderCreator, loadBotData } from "@/lib/bot/server";
+import { botOrderCreator, draftLoader, loadBotData } from "@/lib/bot/server";
 import { notifyNewOrder } from "@/lib/wa";
 
 export const dynamic = "force-dynamic";
@@ -91,7 +91,7 @@ export async function POST(req: Request) {
   }
 
   // ---- bot ----
-  const { products, slots } = await loadBotData(sb);
+  const { products, slots, shipping } = await loadBotData(sb);
 
   const result = await runBot({
     text,
@@ -102,6 +102,8 @@ export async function POST(req: Request) {
     intents,
     products,
     slots,
+    shipping,
+    loadDraft: draftLoader(sb),
     visitorName: c.visitor_name,
     visitorPhone: c.visitor_phone,
     createOrder: botOrderCreator(sb, c, "bot", notifyNewOrder),

@@ -204,6 +204,32 @@ alter table cameliaboutique.order_items add column if not exists size text;
 alter table cameliaboutique.orders add column if not exists discount numeric(12,0) not null default 0;  -- descuento del cupón
 alter table cameliaboutique.orders add column if not exists coupon_code text;
 
+-- Tipos de envío con su costo (se eligen en el checkout y en el bot)
+create table if not exists cameliaboutique.shipping_methods (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null,
+  description text,
+  price       numeric(12,0) not null default 0 check (price >= 0),
+  kind        text not null default 'envio' check (kind in ('envio','retiro')),  -- retiro = no pide dirección
+  active      boolean not null default true,
+  sort_order  integer not null default 0,
+  created_at  timestamptz not null default now()
+);
+alter table cameliaboutique.orders add column if not exists shipping_method text;
+alter table cameliaboutique.orders add column if not exists shipping_cost numeric(12,0) not null default 0;
+
+-- Carrito de la web que se termina por WhatsApp: el mensaje lleva solo el código
+create table if not exists cameliaboutique.cart_drafts (
+  code               text primary key,
+  items              jsonb not null,                -- [{product_id, size, qty}]
+  customer_name      text not null,
+  shipping_method_id uuid references cameliaboutique.shipping_methods(id) on delete set null,
+  coupon             text,
+  created_at         timestamptz not null default now(),
+  used_at            timestamptz,
+  order_id           uuid references cameliaboutique.orders(id) on delete set null
+);
+
 -- ---------------------------------------------------------------------
 --  BOT: respuestas / palabras clave
 -- ---------------------------------------------------------------------
@@ -343,6 +369,7 @@ declare
   v_subtotal numeric;
   v_disc     numeric := 0;
   v_coupon   cameliaboutique.coupons;
+  v_ship     cameliaboutique.shipping_methods;
   v_slot     cameliaboutique.delivery_slots;
   v_date     date;
   v_time     text;
@@ -408,6 +435,16 @@ begin
     v_total := v_subtotal - v_disc;
   end if;
 
+  -- envío: el costo sale de la tabla, no del navegador
+  if nullif(p->>'shipping_method_id','') is not null then
+    select * into v_ship from cameliaboutique.shipping_methods
+     where id = (p->>'shipping_method_id')::uuid and active;
+    if v_ship.id is null then
+      return jsonb_build_object('ok', false, 'error', 'envio');
+    end if;
+    v_total := v_total + v_ship.price;
+  end if;
+
   -- turno de entrega: se bloquea la fila del turno y se cuenta el cupo,
   -- así dos clientes no pueden ocupar el último lugar al mismo tiempo
   v_date := nullif(p->>'delivery_date','')::date;
@@ -456,14 +493,17 @@ begin
 
   insert into cameliaboutique.orders
     (customer_id, conversation_id, source, customer_name, phone, email, address, city,
-     delivery, payment, delivery_date, delivery_slot_id, delivery_time, notes, subtotal, discount, coupon_code, total, status)
+     delivery, payment, delivery_date, delivery_slot_id, delivery_time, notes, subtotal, discount, coupon_code,
+     shipping_method, shipping_cost, total, status)
   values
     (v_customer, v_conv, v_source, v_name, v_phone, nullif(p->>'email',''),
      nullif(p->>'address',''), nullif(p->>'city',''),
-     case when p->>'delivery' = 'pickup' then 'pickup' else 'delivery' end,
+     case when v_ship.id is not null then (case when v_ship.kind = 'retiro' then 'pickup' else 'delivery' end)
+          when p->>'delivery' = 'pickup' then 'pickup' else 'delivery' end,
      coalesce(nullif(p->>'payment',''), 'Transferencia'),
      v_date, v_slot.id, v_time,
-     nullif(p->>'notes',''), v_subtotal, v_disc, v_coupon.code, v_total, v_status)
+     nullif(p->>'notes',''), v_subtotal, v_disc, v_coupon.code,
+     v_ship.name, coalesce(v_ship.price, 0), v_total, v_status)
   returning id into v_order;
 
   insert into cameliaboutique.order_items (order_id, product_id, name, size, price, qty, subtotal)
@@ -479,6 +519,11 @@ begin
 
   if v_conv is not null then
     update cameliaboutique.conversations set customer_id = v_customer where id = v_conv;
+  end if;
+
+  if nullif(p->>'draft_code','') is not null then
+    update cameliaboutique.cart_drafts set used_at = now(), order_id = v_order
+     where code = upper(p->>'draft_code') and used_at is null;
   end if;
 
   return jsonb_build_object('ok', true, 'order_id', v_order, 'subtotal', v_subtotal, 'discount', v_disc,
@@ -544,10 +589,75 @@ set search_path = cameliaboutique, pg_temp as $$
         'audio_message', audio_message, 'payment_methods', payment_methods,
         'pickup_enabled', pickup_enabled)
       from cameliaboutique.settings where id = 1),
+    'shipping', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', m.id, 'name', m.name, 'description', m.description, 'price', m.price, 'kind', m.kind)
+        order by m.sort_order, m.price)
+      from cameliaboutique.shipping_methods m where m.active), '[]'::jsonb),
     'intents', coalesce((select jsonb_agg(to_jsonb(b) - 'created_at' order by b.sort_order, b.name)
       from cameliaboutique.bot_intents b where b.active), '[]'::jsonb)
   );
 $$;
+
+-- Guarda el carrito de la web y devuelve un código corto para el mensaje de WhatsApp
+create or replace function cameliaboutique.create_cart_draft(p jsonb)
+returns jsonb language plpgsql security definer
+set search_path = cameliaboutique, pg_temp as $$
+declare
+  v_code  text;
+  v_items jsonb;
+  v_abc   text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   -- sin O/0 ni I/1
+  i int;
+begin
+  if coalesce(trim(p->>'name'), '') = '' then
+    return jsonb_build_object('ok', false, 'error', 'Falta tu nombre');
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object('product_id', x.pid, 'size', x.sz, 'qty', x.q) order by x.pid, x.sz), '[]'::jsonb)
+    into v_items
+    from (select (e->>'product_id')::uuid as pid, nullif(trim(e->>'size'), '') as sz, sum((e->>'qty')::int) as q
+            from jsonb_array_elements(coalesce(p->'items', '[]'::jsonb)) e group by 1, 2) x
+    join cameliaboutique.products pr on pr.id = x.pid and pr.active
+   where x.q > 0;
+  if jsonb_array_length(v_items) = 0 then
+    return jsonb_build_object('ok', false, 'error', 'El carrito está vacío');
+  end if;
+  if nullif(p->>'shipping_method_id','') is not null and not exists (
+       select 1 from cameliaboutique.shipping_methods where id = (p->>'shipping_method_id')::uuid and active) then
+    return jsonb_build_object('ok', false, 'error', 'Elegí un tipo de envío');
+  end if;
+  if nullif(trim(p->>'coupon'), '') is not null and not ((cameliaboutique.check_coupon(p->>'coupon')->>'ok')::boolean) then
+    return jsonb_build_object('ok', false, 'error', 'El cupón no es válido');
+  end if;
+  loop
+    v_code := '';
+    for i in 1..6 loop
+      v_code := v_code || substr(v_abc, 1 + floor(random() * length(v_abc))::int, 1);
+    end loop;
+    exit when not exists (select 1 from cameliaboutique.cart_drafts where code = v_code);
+  end loop;
+  insert into cameliaboutique.cart_drafts (code, items, customer_name, shipping_method_id, coupon)
+  values (v_code, v_items, left(trim(p->>'name'), 80),
+          nullif(p->>'shipping_method_id','')::uuid, nullif(upper(trim(p->>'coupon')), ''));
+  delete from cameliaboutique.cart_drafts where used_at is null and created_at < now() - interval '30 days';
+  return jsonb_build_object('ok', true, 'code', v_code);
+exception
+  when invalid_text_representation then
+    return jsonb_build_object('ok', false, 'error', 'Datos inválidos');
+end $$;
+
+-- Lo que el bot necesita del carrito (solo si no se usó y es de los últimos 7 días)
+create or replace function cameliaboutique.get_cart_draft(p_code text)
+returns jsonb language plpgsql stable security definer
+set search_path = cameliaboutique, pg_temp as $$
+begin
+  return (select jsonb_build_object(
+           'ok', true, 'code', d.code, 'items', d.items, 'name', d.customer_name,
+           'shipping', (select jsonb_build_object('id', m.id, 'name', m.name, 'price', m.price, 'kind', m.kind)
+                          from cameliaboutique.shipping_methods m where m.id = d.shipping_method_id),
+           'coupon', case when d.coupon is null then null else cameliaboutique.check_coupon(d.coupon) end)
+    from cameliaboutique.cart_drafts d
+   where d.code = upper(trim(coalesce(p_code, ''))) and d.used_at is null
+     and d.created_at > now() - interval '7 days');
+end $$;
 
 -- Cupón válido (para mostrar el descuento en el checkout)
 create or replace function cameliaboutique.check_coupon(p_code text)
@@ -824,6 +934,8 @@ alter table cameliaboutique.bot_intents   enable row level security;
 alter table cameliaboutique.settings      enable row level security;
 alter table cameliaboutique.delivery_slots       enable row level security;
 alter table cameliaboutique.coupons              enable row level security;
+alter table cameliaboutique.shipping_methods     enable row level security;
+alter table cameliaboutique.cart_drafts          enable row level security;
 alter table cameliaboutique.delivery_closed_days enable row level security;
 
 -- lectura pública del catálogo activo
@@ -845,7 +957,8 @@ declare t text;
 begin
   foreach t in array array['admins','categories','products','customers','conversations',
                            'messages','orders','order_items','bot_intents','settings',
-                           'delivery_slots','delivery_closed_days','coupons']
+                           'delivery_slots','delivery_closed_days','coupons',
+                           'shipping_methods','cart_drafts']
   loop
     execute format('drop policy if exists cb_admin_all on cameliaboutique.%I', t);
     execute format('create policy cb_admin_all on cameliaboutique.%I for all to authenticated
@@ -882,6 +995,8 @@ grant execute on function cameliaboutique.wa_agent_message(text, uuid, text)    
 grant execute on function cameliaboutique.wa_order_alert(text, uuid)                to anon, authenticated, service_role;
 grant execute on function cameliaboutique.available_slots(integer)                 to anon, authenticated, service_role;
 grant execute on function cameliaboutique.check_coupon(text)                        to anon, authenticated, service_role;
+grant execute on function cameliaboutique.create_cart_draft(jsonb)                  to anon, authenticated, service_role;
+grant execute on function cameliaboutique.get_cart_draft(text)                      to anon, authenticated, service_role;
 
 -- ---------------------------------------------------------------------
 --  STORAGE: bucket "cameliaboutique" (imágenes públicas, solo admin sube)
@@ -972,6 +1087,14 @@ select v.wd, v.st::time, v.en::time, 5
                (3,'09:00','12:00'),(3,'14:00','18:00'),(4,'09:00','12:00'),(4,'14:00','18:00'),
                (5,'09:00','12:00'),(5,'14:00','18:00'),(6,'09:00','12:00')) v(wd, st, en)
  where not exists (select 1 from cameliaboutique.delivery_slots);
+
+insert into cameliaboutique.shipping_methods (name, description, price, kind, sort_order)
+select v.n, v.d, v.p, v.k, v.o from (values
+  ('Retiro en el local', 'Pasás a buscarlo por la tienda', 0, 'retiro', 1),
+  ('Delivery Asunción y Gran Asunción', 'Te lo llevamos a tu casa', 20000, 'envio', 2),
+  ('Envío al interior (encomienda)', 'Lo despachamos por transportadora', 35000, 'envio', 3)
+) v(n, d, p, k, o)
+where not exists (select 1 from cameliaboutique.shipping_methods);
 
 insert into cameliaboutique.coupons (code, percent, label)
 values ('CAMELIA10', 10, '10% off en tu primera compra')

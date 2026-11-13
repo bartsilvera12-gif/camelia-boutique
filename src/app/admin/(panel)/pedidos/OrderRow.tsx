@@ -43,6 +43,9 @@ export default function OrderCard({ o }: { o: Order }) {
               </li>
             ))}
           </ul>
+          {!!o.shipping_cost && o.shipping_cost > 0 && (
+            <div className="flex justify-between text-xs text-thyme mt-2"><span>Envío ({o.shipping_method})</span><span>{formatGs(o.shipping_cost)}</span></div>
+          )}
           {!!o.discount && o.discount > 0 && (
             <div className="border-t border-champagne mt-2 pt-2 space-y-0.5 text-xs text-thyme">
               <div className="flex justify-between"><span>Subtotal</span><span>{formatGs(o.subtotal)}</span></div>
@@ -63,7 +66,7 @@ export default function OrderCard({ o }: { o: Order }) {
           {o.email && <div>{o.email}</div>}
           {o.address && <div>{o.address}{o.city ? `, ${o.city}` : ""}</div>}
           <div className="text-xs text-thyme">
-            {o.delivery === "pickup" ? "Retira en el local" : "Envío a domicilio"}
+            {o.shipping_method || (o.delivery === "pickup" ? "Retira en el local" : "Envío a domicilio")}
             {o.delivery_time ? ` · ${o.delivery_time}` : ""} · Pago: {o.payment}
           </div>
           <div className="flex items-center gap-2 pt-1">

@@ -71,6 +71,8 @@ export type Order = {
   subtotal: number;
   discount?: number;
   coupon_code?: string | null;
+  shipping_method?: string | null;
+  shipping_cost?: number;
   total: number;
   status: OrderStatus;
   created_at: string;
@@ -184,4 +186,15 @@ export type DeliverySlotRow = {
   end_time: string;
   capacity: number;
   active: boolean;
+};
+
+/** Tipo de envío con su costo (Entregas y pagos). */
+export type ShippingMethod = {
+  id: string;
+  name: string;
+  description?: string | null;
+  price: number;
+  kind: "envio" | "retiro";
+  active?: boolean;
+  sort_order?: number;
 };

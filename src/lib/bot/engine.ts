@@ -2,14 +2,14 @@
 // No inventa nada: responde con lo que el negocio cargó en el panel.
 
 import { finalPrice, formatGs } from "../format";
-import type { BotIntent, ChatOption, DeliverySlot, Product, StoreSettings } from "../types";
+import type { BotIntent, ChatOption, DeliverySlot, Product, ShippingMethod, StoreSettings } from "../types";
 import {
   STOPWORDS, isNo, isYes, normalize, parseDate, parsePhone, parseQty, tokens, wordSimilarity,
 } from "./text";
 
 type Step =
   | "order_product" | "order_size" | "order_qty" | "order_mode" | "order_slot" | "order_address"
-  | "order_name" | "order_phone" | "order_payment" | "order_confirm" | "order_fill_size";
+  | "order_name" | "order_phone" | "order_payment" | "order_confirm" | "order_fill_size" | "order_cart_ok";
 
 /** Segundo producto para completar la cantidad cuando no alcanza el stock del primero. */
 export type ExtraItem = { productId: string; size?: string; qty: number };
@@ -23,6 +23,12 @@ export type BotState = {
   extra?: ExtraItem;    // producto parecido para completar
   fillId?: string;      // producto de relleno esperando talle
   mode?: "envio" | "retiro";
+  cart?: ExtraItem[];   // carrito que vino de la web (por código)
+  draftCode?: string;
+  shippingId?: string;
+  shippingName?: string;
+  shippingCost?: number;
+  coupon?: { code: string; percent: number };
   date?: string;
   slotId?: string;
   slotLabel?: string;
@@ -38,10 +44,10 @@ export type BotState = {
 export type BotOut = { body: string; options?: ChatOption[]; letters?: boolean };
 
 export type OrderRequest = {
-  productId: string;
-  size?: string;
-  qty: number;
-  extra?: ExtraItem;
+  items: ExtraItem[];
+  shippingId?: string;
+  coupon?: string;
+  draftCode?: string;
   date: string;
   slotId: string;
   mode: "envio" | "retiro";
@@ -64,9 +70,20 @@ export type BotInput = {
   intents: BotIntent[];
   products: Product[];
   slots: DeliverySlot[];      // turnos con lugar libre, en orden
+  shipping?: ShippingMethod[]; // tipos de envío con su costo
+  loadDraft?: (code: string) => Promise<CartDraft | null>;
   visitorName?: string | null;
   visitorPhone?: string | null;
   createOrder: (o: OrderRequest) => Promise<OrderResult>;
+};
+
+/** Carrito guardado desde el checkout de la web. */
+export type CartDraft = {
+  code: string;
+  name: string;
+  items: { product_id: string; size?: string | null; qty: number }[];
+  shipping: ShippingMethod | null;
+  coupon: { ok: boolean; code?: string; percent?: number } | null;
 };
 
 export type BotResult = {
@@ -237,6 +254,8 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   let slots = input.slots;
   const payments = (settings.payment_methods || []).filter(Boolean);
   const pickup = settings.pickup_enabled !== false;
+  const shipping = (input.shipping || []).filter(Boolean);
+  const shipLabel = (m: { name: string; price: number }) => `${m.name} — ${Number(m.price) ? formatGs(Number(m.price)) : "gratis"}`;
 
   const st: BotState = {
     ...input.state,
@@ -279,6 +298,61 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   if (vk === "order") {
     const p = products.find((x) => x.id === vv);
     if (p) return startOrder(p, { ...st, misses: 0 });
+  }
+
+  if (vk === "human") return handoff(st);
+
+  // ----- carrito de la web: "Mi código de pedido: XXXXXX" -----
+  const draftCode = /c[oó]digo(?:\s+de\s+pedido)?\s*:?\s*\*?\s*([A-HJ-NP-Z2-9]{6})\b/i.exec(text)?.[1]?.toUpperCase();
+  if (draftCode && input.loadDraft) {
+    const draft = await input.loadDraft(draftCode);
+    if (!draft) {
+      return say({
+        body: `No encontré un pedido pendiente con el código ${draftCode} (puede que ya esté confirmado). ¿Lo armamos de nuevo?`,
+        options: menuOptions(intents),
+      }, clearOrder(st));
+    }
+    const avisos: string[] = [];
+    const cart: ExtraItem[] = [];
+    for (const it of draft.items) {
+      const prod = products.find((x) => x.id === it.product_id);
+      const nombre = prod?.name || "Un producto";
+      if (!prod || prod.stock <= 0) { avisos.push(`*${nombre}* ya no tiene stock.`); continue; }
+      const q = Math.min(Number(it.qty) || 1, prod.stock);
+      if (q < it.qty) avisos.push(`De *${prod.name}* quedan ${prod.stock} (pediste ${it.qty}).`);
+      cart.push({ productId: prod.id, size: it.size || undefined, qty: q });
+    }
+    const ship = draft.shipping;
+    const base: BotState = {
+      ...clearOrder(st),
+      cart,
+      draftCode,
+      name: draft.name || st.name,
+      shippingId: ship?.id,
+      shippingName: ship?.name,
+      shippingCost: ship ? Number(ship.price) : undefined,
+      mode: ship ? (ship.kind === "retiro" ? "retiro" : "envio") : undefined,
+      coupon: draft.coupon?.ok && draft.coupon.code ? { code: draft.coupon.code, percent: Number(draft.coupon.percent) } : undefined,
+    };
+    const nombre = (draft.name || "").split(" ")[0];
+    if (!cart.length) {
+      return say(
+        [{ body: `¡Hola${nombre ? " " + nombre : ""}! Uy, los productos de tu pedido se agotaron 😔` }, catalogOverview(products, "Te muestro lo que tenemos:")],
+        clearOrder(st)
+      );
+    }
+    const intro = `¡Hola${nombre ? " " + nombre : ""}! Recibí tu pedido 🌸\n${resumen(base).texto}`;
+    if (avisos.length) {
+      return say({
+        body: `${intro}\n\n⚠️ ${avisos.join("\n")}\n¿Seguimos con lo disponible?`,
+        options: [
+          { label: "Sí, seguir", value: "cart:ok" },
+          { label: "Hablar con una persona", value: "human:1" },
+        ],
+      }, { ...base, step: "order_cart_ok" });
+    }
+    const r = next(base);
+    return say([{ body: intro }, ...r.messages], r.state);
   }
 
   // ----- salir del flujo -----
@@ -353,7 +427,8 @@ export async function runBot(input: BotInput): Promise<BotResult> {
   function clearOrder(s: BotState): BotState {
     return {
       ...s, step: undefined, productId: undefined, size: undefined, qty: undefined, mode: undefined, date: undefined,
-      wantQty: undefined, extra: undefined, fillId: undefined,
+      wantQty: undefined, extra: undefined, fillId: undefined, cart: undefined, draftCode: undefined,
+      shippingId: undefined, shippingName: undefined, shippingCost: undefined, coupon: undefined,
       slotId: undefined, slotLabel: undefined, payment: undefined, misses: 0,
     };
   }
@@ -371,21 +446,56 @@ export async function runBot(input: BotInput): Promise<BotResult> {
       .slice(0, 3);
   }
 
+  /** Los ítems del pedido: el carrito de la web, o el producto elegido (+ el de relleno). */
+  function itemsDe(s: BotState): ExtraItem[] {
+    if (s.cart?.length) return s.cart;
+    if (!s.productId || !s.qty) return [];
+    return [{ productId: s.productId, size: s.size, qty: s.qty }, ...(s.extra ? [s.extra] : [])];
+  }
+
+  /** Líneas del pedido con precios, cupón, envío y total (igual que calcula la base). */
+  function resumen(s: BotState): { texto: string; total: number } {
+    const lineas: string[] = [];
+    let sub = 0;
+    for (const it of itemsDe(s)) {
+      const prod = products.find((x) => x.id === it.productId);
+      if (!prod) continue;
+      const linea = finalPrice(prod) * it.qty;
+      sub += linea;
+      lineas.push(`• ${it.qty} × ${prod.name}${it.size ? ` (talle ${it.size})` : ""} — ${formatGs(linea)}`);
+    }
+    const desc = s.coupon ? Math.round((sub * s.coupon.percent) / 100) : 0;
+    const env = s.shippingCost || 0;
+    const total = sub - desc + env;
+    if (desc) lineas.push(`• Cupón ${s.coupon!.code}: -${formatGs(desc)}`);
+    if (s.shippingName) lineas.push(`• ${s.shippingName}: ${env ? formatGs(env) : "gratis"}`);
+    lineas.push(`*Total: ${formatGs(total)}*`);
+    return { texto: lineas.join("\n"), total };
+  }
+
   /** Pregunta lo primero que falte del pedido. */
   function next(s: BotState): BotResult {
-    const p = products.find((x) => x.id === s.productId);
-    if (!p) return say({ body: "¿Qué producto querés pedir?" }, { ...s, step: "order_product" });
-    if (p.sizes?.length && !s.size) {
-      return say({
-        body: `¿Qué talle de *${p.name}* querés?`,
-        options: p.sizes.map((t) => ({ label: t, value: `size:${t}` })),
-      }, { ...s, step: "order_size" });
-    }
-    if (!s.qty) {
-      const hay = p.stock === 1 ? "queda 1" : `hay ${p.stock} disponibles`;
-      return say({ body: `¿Cuántas querés? Escribí el número (${hay}).` }, { ...s, step: "order_qty" });
+    if (!s.cart?.length) {
+      const p = products.find((x) => x.id === s.productId);
+      if (!p) return say({ body: "¿Qué producto querés pedir?" }, { ...s, step: "order_product" });
+      if (p.sizes?.length && !s.size) {
+        return say({
+          body: `¿Qué talle de *${p.name}* querés?`,
+          options: p.sizes.map((t) => ({ label: t, value: `size:${t}` })),
+        }, { ...s, step: "order_size" });
+      }
+      if (!s.qty) {
+        const hay = p.stock === 1 ? "queda 1" : `hay ${p.stock} disponibles`;
+        return say({ body: `¿Cuántas querés? Escribí el número (${hay}).` }, { ...s, step: "order_qty" });
+      }
     }
     if (!s.mode) {
+      if (shipping.length) {
+        return say({
+          body: "¿Cómo lo querés recibir?",
+          options: shipping.map((m) => ({ label: shipLabel(m), value: `ship:${m.id}` })),
+        }, { ...s, step: "order_mode" });
+      }
       if (!pickup) return next({ ...s, mode: "envio" });
       return say({
         body: "¿Cómo lo querés recibir?",
@@ -416,18 +526,12 @@ export async function runBot(input: BotInput): Promise<BotResult> {
         options: payments.map((m) => ({ label: m, value: `pay:${m}` })),
       }, { ...s, step: "order_payment" });
     }
-    const ex = s.extra ? products.find((x) => x.id === s.extra!.productId) : undefined;
-    const total = finalPrice(p) * s.qty + (ex && s.extra ? finalPrice(ex) * s.extra.qty : 0);
-    const lineaExtra = ex && s.extra
-      ? `• ${s.extra.qty} × ${ex.name}${s.extra.size ? ` (talle ${s.extra.size})` : ""} — ${formatGs(finalPrice(ex) * s.extra.qty)}\n`
-      : "";
     const entrega = s.mode === "retiro"
       ? `Retiro en el local${settings.address ? ` (${settings.address})` : ""}`
       : `Envío a ${s.address}`;
     return say({
       body:
-        `Entendí esto:\n• ${s.qty} × ${p.name}${s.size ? ` (talle ${s.size})` : ""} — ${formatGs(finalPrice(p) * s.qty)}\n` + lineaExtra +
-        (lineaExtra ? `• Total: ${formatGs(total)}\n` : "") +
+        `Entendí esto:\n${resumen(s).texto}\n\n` +
         `• ${entrega}\n• ${s.slotLabel}\n` +
         (s.payment ? `• Pago: ${s.payment}\n` : "") +
         `• A nombre de ${s.name} (${s.phone})\n¿Es correcto?`,
@@ -558,7 +662,30 @@ export async function runBot(input: BotInput): Promise<BotResult> {
         }
         return next({ ...s, extra: { ...s.extra, size }, fillId: undefined });
       }
+      case "order_cart_ok": {
+        if ((k === "cart" && v === "ok") || isYes(txt)) return next({ ...s, step: undefined });
+        if (isNo(txt)) return handoff(s);
+        return say({
+          body: "¿Seguimos con lo disponible?",
+          options: [{ label: "Sí, seguir", value: "cart:ok" }, { label: "Hablar con una persona", value: "human:1" }],
+        }, s);
+      }
       case "order_mode": {
+        if (shipping.length) {
+          const m = k === "ship"
+            ? shipping.find((x) => x.id === v)
+            : shipping.find((x) => nt.length >= 4 && normalize(x.name).includes(nt)) ||
+              (/retir|buscar|paso|local|tienda/.test(nt) ? shipping.find((x) => x.kind === "retiro") : undefined) ||
+              (/interior|encomienda/.test(nt) ? shipping.find((x) => /interior|encomienda/i.test(x.name)) : undefined) ||
+              (/envi|delivery|domicilio|casa|manden|mandar/.test(nt) ? shipping.find((x) => x.kind === "envio") : undefined);
+          if (!m) {
+            return say({ body: "Elegí cómo lo querés recibir:", options: shipping.map((x) => ({ label: shipLabel(x), value: `ship:${x.id}` })) }, s);
+          }
+          return next({
+            ...s, shippingId: m.id, shippingName: m.name, shippingCost: Number(m.price),
+            mode: m.kind === "retiro" ? "retiro" : "envio",
+          });
+        }
         const mode = k === "mode" ? v
           : /retir|buscar|paso|local|tienda/.test(nt) ? "retiro"
           : /envi|delivery|domicilio|casa|manden|mandar/.test(nt) ? "envio" : null;
@@ -603,14 +730,15 @@ export async function runBot(input: BotInput): Promise<BotResult> {
         return next({ ...s, payment: pay });
       }
       case "order_confirm": {
-        if (!p) return null;
+        if (!itemsDe(s).length) return null;
         if (v === "slot") return next({ ...s, slotId: undefined, slotLabel: undefined, date: undefined });
         if (v === "no" || (!v && isNo(txt))) {
           return say({ body: "Listo, no anoté nada. ¿Te ayudo con algo más?", options: menuOptions(intents) }, clearOrder(s));
         }
         if (v === "si" || isYes(txt)) {
           const res = await input.createOrder({
-            productId: p.id, size: s.size, qty: s.qty!, extra: s.extra, date: s.date!, slotId: s.slotId!, mode: s.mode!,
+            items: itemsDe(s), shippingId: s.shippingId, coupon: s.coupon?.code, draftCode: s.draftCode,
+            date: s.date!, slotId: s.slotId!, mode: s.mode!,
             address: s.address, payment: s.payment || payments[0] || "A coordinar", name: s.name!, phone: s.phone!,
           });
           if (res.ok) {
@@ -629,7 +757,23 @@ export async function runBot(input: BotInput): Promise<BotResult> {
               { ...s, step: "order_slot", slotId: undefined, slotLabel: undefined, date: undefined }
             );
           }
-          if (res.shortage) {
+          if (res.shortage && s.cart?.length) {
+            const sid = res.shortage.productId;
+            const avail = res.shortage.available;
+            const prod = products.find((x) => x.id === sid);
+            const cart = s.cart
+              .map((it) => (it.productId === sid ? { ...it, qty: Math.min(it.qty, avail) } : it))
+              .filter((it) => it.qty > 0);
+            if (!cart.length) {
+              return say({ body: "Uy, justo se agotó lo que pediste. ¿Querés ver otros productos?", options: [{ label: "Ver productos", value: "menu:productos" }] }, clearOrder(s));
+            }
+            const r = next({ ...s, cart });
+            return say(
+              [{ body: `Uy, justo cambió el stock de *${prod?.name || "un producto"}* (${avail <= 0 ? "se agotó" : avail === 1 ? "queda 1" : `quedan ${avail}`}). Ajusté tu pedido:` }, ...r.messages],
+              r.state
+            );
+          }
+          if (res.shortage && p) {
             const avail = res.shortage.available;
             const cual = products.find((x) => x.id === res.shortage!.productId) || p;
             if (cual.id === p.id && avail <= 0) {

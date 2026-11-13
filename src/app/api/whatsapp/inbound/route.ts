@@ -4,7 +4,7 @@
 import { NextResponse } from "next/server";
 import { publicClient } from "@/lib/supabase/public";
 import { runBot, type BotState } from "@/lib/bot/engine";
-import { botOrderCreator, loadBotData } from "@/lib/bot/server";
+import { botOrderCreator, draftLoader, loadBotData } from "@/lib/bot/server";
 import { isOrderAlert, BRIDGE_SECRET, formatForWhatsApp, notifyNewOrder, sendWhatsApp } from "@/lib/wa";
 
 export const dynamic = "force-dynamic";
@@ -107,7 +107,7 @@ export async function POST(req: Request) {
   }
 
   // ---- bot ----
-  const { settings, intents, products, slots } = await loadBotData(sb);
+  const { settings, intents, products, slots, shipping } = await loadBotData(sb);
   const state = (c.state || {}) as WaState;
 
   // "2" → la opción 2 de la última lista que mandó el bot; si la lista era con letras,
@@ -130,6 +130,8 @@ export async function POST(req: Request) {
     intents,
     products,
     slots,
+    shipping,
+    loadDraft: draftLoader(sb),
     visitorName: null, // el nombre de perfil de WhatsApp no siempre es el real: se pregunta
     visitorPhone: c.visitor_phone || m.fromPhone || null,
     createOrder: botOrderCreator(sb, c, "whatsapp", notifyNewOrder),

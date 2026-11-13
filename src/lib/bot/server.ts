@@ -1,7 +1,7 @@
 // Piezas del bot que usan la base: compartidas por el chat web y WhatsApp.
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { BotIntent, DeliverySlot, Product, StoreSettings } from "../types";
-import type { OrderRequest, OrderResult } from "./engine";
+import type { BotIntent, DeliverySlot, Product, ShippingMethod, StoreSettings } from "../types";
+import type { CartDraft, OrderRequest, OrderResult } from "./engine";
 
 export async function loadBotData(sb: SupabaseClient<any, any, any>) {
   const [{ data: cfg, error }, { data: prods }, { data: slots }] = await Promise.all([
@@ -13,12 +13,22 @@ export async function loadBotData(sb: SupabaseClient<any, any, any>) {
   return {
     settings: (cfg as any).settings as StoreSettings,
     intents: ((cfg as any).intents || []) as BotIntent[],
+    shipping: ((cfg as any).shipping || []) as ShippingMethod[],
     products: (prods || []) as Product[],
     slots: (slots || []) as DeliverySlot[],
   };
 }
 
-/** Crea el pedido que armó el bot (la base revalida stock y cupo del turno con bloqueo). */
+/** Busca el carrito que la persona armó en la web (por el código del mensaje). */
+export function draftLoader(sb: SupabaseClient<any, any, any>) {
+  return async (code: string): Promise<CartDraft | null> => {
+    const { data, error } = await sb.rpc("get_cart_draft", { p_code: code });
+    if (error || !data || !(data as any).ok) return null;
+    return data as CartDraft;
+  };
+}
+
+/** Crea el pedido que armó el bot (la base revalida stock, cupo del turno, envío y cupón). */
 export function botOrderCreator(
   sb: SupabaseClient<any, any, any>,
   conv: { id: string; token: string },
@@ -36,13 +46,13 @@ export function botOrderCreator(
         payment: o.payment,
         delivery_date: o.date,
         delivery_slot_id: o.slotId,
+        shipping_method_id: o.shippingId || "",
+        coupon: o.coupon || "",
+        draft_code: o.draftCode || "",
         notes: source === "whatsapp" ? "Pedido tomado por el bot de WhatsApp" : "Pedido tomado por el bot de la web",
         conversation_id: conv.id,
         conversation_token: conv.token,
-        items: [
-          { product_id: o.productId, size: o.size || null, qty: o.qty },
-          ...(o.extra ? [{ product_id: o.extra.productId, size: o.extra.size || null, qty: o.extra.qty }] : []),
-        ],
+        items: o.items.map((it) => ({ product_id: it.productId, size: it.size || null, qty: it.qty })),
       },
     });
     if (error) return { ok: false, error: error.message };

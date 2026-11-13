@@ -1,7 +1,8 @@
 import { requireAdmin } from "@/lib/admin";
-import type { DeliverySlotRow, StoreSettings } from "@/lib/types";
+import type { DeliverySlotRow, ShippingMethod, StoreSettings } from "@/lib/types";
+import { formatGs } from "@/lib/format";
 import ConfirmButton from "../ConfirmButton";
-import { addClosedDay, deleteSlot, removeClosedDay, saveDeliverySettings, saveSlot } from "./actions";
+import { addClosedDay, deleteShipping, deleteSlot, removeClosedDay, saveDeliverySettings, saveShipping, saveSlot } from "./actions";
 import SaveButton from "../SaveButton";
 
 const DIAS = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
@@ -9,12 +10,14 @@ const hm = (t: string) => t.slice(0, 5);
 
 export default async function EntregasPage() {
   const { sb } = await requireAdmin();
-  const [{ data: slotsData }, { data: closed }, { data: s }, { data: libres }] = await Promise.all([
+  const [{ data: slotsData }, { data: closed }, { data: s }, { data: libres }, { data: envios }] = await Promise.all([
     sb.from("delivery_slots").select("*").order("weekday").order("start_time"),
     sb.from("delivery_closed_days").select("*").gte("day", new Date().toISOString().slice(0, 10)).order("day"),
     sb.from("settings").select("payment_methods, pickup_enabled, delivery_lead_days, delivery_days_ahead").eq("id", 1).maybeSingle(),
     sb.rpc("available_slots", { p_days: 7 }),
+    sb.from("shipping_methods").select("*").order("sort_order").order("price"),
   ]);
+  const shipping = (envios || []) as ShippingMethod[];
   const slots = (slotsData || []) as DeliverySlotRow[];
   const settings = (s || {}) as StoreSettings;
   const proximos = (libres || []) as { date: string; start: string; end: string; remaining: number }[];
@@ -25,11 +28,61 @@ export default async function EntregasPage() {
     <>
       <h1 className="font-serif text-3xl text-ink mb-1">Entregas y pagos</h1>
       <p className="text-sm text-thyme mb-6">
-        Días, horarios y cupos que ofrecen el bot y el checkout. Un turno lleno deja de ofrecerse solo.
+        Tipos de envío con su costo, días, horarios y cupos que ofrecen el bot y el checkout. Un turno lleno deja de ofrecerse solo.
       </p>
 
       <div className="grid xl:grid-cols-[1fr_340px] gap-6 items-start">
         <div className="space-y-6">
+          <section className="bg-cream border border-champagne rounded-xl p-5">
+            <h2 className="font-serif text-xl text-ink">Tipos de envío y costos</h2>
+            <p className="text-[11px] text-thyme mb-4">
+              Es lo que la persona elige en el checkout y en el bot. El costo se suma al total del pedido.
+              “Retiro” no pide dirección.
+            </p>
+            <div className="space-y-3">
+              {shipping.map((m) => (
+                <form key={m.id} action={saveShipping} className={"rounded-xl border border-champagne p-3 grid sm:grid-cols-[1fr_130px_120px_70px] gap-2 items-end " + (m.active === false ? "opacity-60" : "")}>
+                  <input type="hidden" name="id" value={m.id} />
+                  <div><label className="label">Nombre</label><input name="name" defaultValue={m.name} required className="input !py-1.5" /></div>
+                  <div><label className="label">Costo (Gs.)</label><input name="price" type="number" min={0} step={1000} defaultValue={Number(m.price)} className="input !py-1.5" /></div>
+                  <div>
+                    <label className="label">Tipo</label>
+                    <select name="kind" defaultValue={m.kind} className="input !py-1.5">
+                      <option value="envio">Envío</option>
+                      <option value="retiro">Retiro</option>
+                    </select>
+                  </div>
+                  <div><label className="label">Orden</label><input name="sort_order" type="number" defaultValue={m.sort_order ?? 0} className="input !py-1.5" /></div>
+                  <div className="sm:col-span-4"><input name="description" defaultValue={m.description || ""} placeholder="Descripción corta (opcional)" className="input !py-1.5" /></div>
+                  <div className="sm:col-span-4 flex items-center gap-4">
+                    <label className="flex items-center gap-1.5 text-xs"><input type="checkbox" name="active" defaultChecked={m.active !== false} /> Activo</label>
+                    <span className="text-xs text-thyme">{Number(m.price) ? formatGs(Number(m.price)) : "Gratis"}</span>
+                    <span className="ml-auto flex items-center gap-3">
+                      <ConfirmButton action={deleteShipping.bind(null, m.id)} message={`¿Eliminar "${m.name}"? Los pedidos que ya lo usaron no cambian.`} className="text-xs text-rose hover:underline">
+                        Eliminar
+                      </ConfirmButton>
+                      <SaveButton className="btn-outline !py-1.5 !px-3 !text-xs">Guardar</SaveButton>
+                    </span>
+                  </div>
+                </form>
+              ))}
+              {shipping.length === 0 && <div className="text-xs text-thyme">No hay tipos de envío: el checkout no va a preguntar cómo lo reciben.</div>}
+            </div>
+            <form action={saveShipping} className="mt-4 pt-4 border-t border-champagne grid sm:grid-cols-[1fr_130px_120px_auto] gap-2 items-end">
+              <div><label className="label">Nuevo tipo de envío</label><input name="name" required placeholder="Ej. Delivery Luque" className="input !py-1.5" /></div>
+              <div><label className="label">Costo (Gs.)</label><input name="price" type="number" min={0} step={1000} defaultValue={0} className="input !py-1.5" /></div>
+              <div>
+                <label className="label">Tipo</label>
+                <select name="kind" defaultValue="envio" className="input !py-1.5">
+                  <option value="envio">Envío</option>
+                  <option value="retiro">Retiro</option>
+                </select>
+              </div>
+              <input type="hidden" name="sort_order" value={shipping.length + 1} />
+              <SaveButton className="btn-primary !py-1.5 !px-4 !text-xs" resetOnDone doneText="✓ Agregado">Agregar</SaveButton>
+            </form>
+          </section>
+
           <section className="bg-cream border border-champagne rounded-xl p-5">
             <h2 className="font-serif text-xl text-ink mb-3">Turnos de entrega</h2>
             <div className="space-y-4">
