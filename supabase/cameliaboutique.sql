@@ -956,3 +956,6 @@ end $$;
 
 -- Para el realtime del panel no hace falta nada: el panel consulta cada pocos segundos.
 -- Exponer el schema: agregar "cameliaboutique" a PGRST_DB_SCHEMAS y reiniciar rest.
+
+-- Que la API (PostgREST) recargue el schema: sin esto no ve las funciones ni columnas nuevas.
+notify pgrst, 'reload schema';

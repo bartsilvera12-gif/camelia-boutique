@@ -73,3 +73,6 @@ select 'categorías' as que, count(*) from cameliaboutique.categories
 union all select 'productos', count(*) from cameliaboutique.products
 union all select 'clientes', count(*) from cameliaboutique.customers
 union all select 'pedidos', count(*) from cameliaboutique.orders;
+
+-- Que la API recargue el schema.
+notify pgrst, 'reload schema';
